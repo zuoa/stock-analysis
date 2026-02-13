@@ -17,7 +17,7 @@ npx skill add /Users/yujian/Code/py/aj-skills/skills/stock-sector-monitoring
 ### 2) 从 GitHub 安装
 
 ```bash
-npx skill add https://github.com/zuoa/aj-skills --skill stock-sector-monitoring
+npx skills add https://github.com/zuoa/aj-skills --skill stock-sector-monitoring
 ```
 
 

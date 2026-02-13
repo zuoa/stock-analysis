@@ -1,0 +1,195 @@
+{
+  "code": "600519",
+  "fetch_time": "2026-02-13T10:00:00",
+  "data_type": "all",
+  "basic_info": {
+    "code": "600519",
+    "name": "贵州茅台",
+    "industry": "白酒",
+    "market_cap": 2200000000000,
+    "float_cap": 1800000000000,
+    "total_shares": 1256000000,
+    "float_shares": 1000000000,
+    "pe_ttm": 24.0,
+    "pb": 7.5,
+    "listing_date": "2001-08-27",
+    "ts_code": "600519.SH"
+  },
+  "financial_data": {
+    "balance_sheet": [
+      {
+        "end_date": "20250930",
+        "total_assets": 300000000000,
+        "total_liab": 38000000000,
+        "总资产": 300000000000,
+        "总负债": 38000000000,
+        "资产负债率": 12.67
+      }
+    ],
+    "income_statement": [
+      {
+        "end_date": "20250930",
+        "n_income": 65000000000,
+        "revenue": 128000000000,
+        "total_revenue": 130000000000,
+        "净利润": 65000000000,
+        "营业收入": 128000000000,
+        "主营业务收入": 130000000000
+      }
+    ],
+    "cash_flow": [
+      {
+        "end_date": "20250930",
+        "n_cashflow_act": 39000000000,
+        "c_pay_acq_const_fiolta": 2500000000,
+        "经营活动产生的现金流量净额": 39000000000,
+        "购建固定资产、无形资产和其他长期资产支付的现金": 2500000000
+      }
+    ]
+  },
+  "financial_indicators": [
+    {
+      "日期": "20250930",
+      "净资产收益率": 24.0,
+      "加权净资产收益率": 23.5,
+      "总资产报酬率": 28.0,
+      "销售毛利率": 90.0,
+      "销售净利率": 50.0,
+      "资产负债率": 12.67,
+      "流动比率": 6.0,
+      "速动比率": 4.8,
+      "应收账款周转率": 20.0,
+      "应收账款周转天数": 18.0,
+      "存货周转率": 2.2,
+      "存货周转天数": 150.0,
+      "总资产周转率": 0.43,
+      "营业收入增长率": 8.0,
+      "主营业务收入增长率": 8.0,
+      "净利润增长率": 10.0,
+      "应收账款增长率": 4.0,
+      "存货增长率": 6.0,
+      "权益乘数": 1.2
+    },
+    {
+      "日期": "20240930",
+      "净资产收益率": 22.0,
+      "销售毛利率": 88.0,
+      "净利润增长率": 9.0
+    }
+  ],
+  "performance_data": {
+    "forecast": [
+      {
+        "ann_date": "20260115",
+        "p_change_min": -25.0,
+        "p_change_max": -15.0,
+        "type": "预减",
+        "summary": "受行业周期影响"
+      }
+    ],
+    "express": [
+      {
+        "ann_date": "20260120",
+        "yoy_net_profit": -22.0,
+        "yoy_sales": -5.0
+      }
+    ],
+    "audit": [
+      {
+        "ann_date": "20250425",
+        "audit_result": "标准无保留意见"
+      }
+    ],
+    "main_business": {
+      "by_product": [
+        {
+          "end_date": "20250930",
+          "bz_item": "高端白酒",
+          "bz_sales": 90000000000
+        },
+        {
+          "end_date": "20250930",
+          "bz_item": "系列酒",
+          "bz_sales": 20000000000
+        }
+      ],
+      "by_region": [
+        {
+          "end_date": "20250930",
+          "bz_item": "国内",
+          "bz_sales": 100000000000
+        }
+      ]
+    }
+  },
+  "valuation": {
+    "latest": {
+      "date": "20260213",
+      "pe_ttm": 24.0,
+      "pb": 7.5
+    },
+    "history_count": 700,
+    "pe_percentile": 45.0,
+    "pb_percentile": 55.0
+  },
+  "price": {
+    "latest_price": 1680.0,
+    "latest_date": "20260213",
+    "price_change_pct": -1.2,
+    "volume": 35000,
+    "turnover": 580000,
+    "high_60d": 1820.0,
+    "low_60d": 1550.0,
+    "avg_volume_20d": 42000,
+    "price_data": []
+  },
+  "holder": {
+    "top_10_holders": [],
+    "holder_count_history": []
+  },
+  "dividend": {
+    "dividend_history": [
+      {
+        "end_date": "20241231",
+        "cash_div_tax": 25.911,
+        "每股股利": 25.911,
+        "派息": 25.911
+      },
+      {
+        "end_date": "20231231",
+        "cash_div_tax": 23.882,
+        "每股股利": 23.882,
+        "派息": 23.882
+      }
+    ],
+    "dividend_count": 2
+  },
+  "news_items": [
+    {
+      "title": "贵州茅台发布年度分红方案，市场反应积极",
+      "source": "财经网",
+      "published_at": "2026-02-12T09:30:00+08:00",
+      "url": "https://example.com/news1",
+      "summary": "公司公告分红与回购计划，投资者情绪改善",
+      "query": "600519 贵州茅台 A股 上市公司"
+    },
+    {
+      "title": "白酒板块短期承压，部分机构下调预期",
+      "source": "证券时报",
+      "published_at": "2026-02-11T15:00:00+08:00",
+      "url": "https://example.com/news2",
+      "summary": "行业需求波动带来短期风险",
+      "query": "600519 贵州茅台 A股 上市公司"
+    }
+  ],
+  "news_sentiment": {
+    "analysis_time": "2026-02-13T10:00:00",
+    "news_count": 2,
+    "overall_sentiment": 0.12,
+    "risk_level": "低",
+    "risk_tag_count": {
+      "经营": 1
+    },
+    "top_negative_events": []
+  }
+}

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -17,6 +16,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
+from env_loader import get_tushare_token
 
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
@@ -98,7 +98,7 @@ def _request_rss(url: str) -> bytes:
 
 
 def _fetch_tushare_news(code: str, name: str, days: int, limit: int) -> List[dict]:
-    token = os.getenv("TUSHARE_TOKEN") or os.getenv("TS_TOKEN")
+    token = get_tushare_token()
     if not token:
         return []
 

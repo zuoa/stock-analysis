@@ -1,5 +1,7 @@
 # {{stock_name}} ({{stock_code}}) 投资分析报告
 
+**总结标题**: {{summary_title}}
+
 **分析日期**: {{analysis_date}}
 **分析级别**: {{analysis_level}}
 **综合评分**: {{overall_score}}/100

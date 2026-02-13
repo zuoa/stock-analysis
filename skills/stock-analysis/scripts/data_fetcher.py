@@ -17,6 +17,7 @@ from functools import wraps
 from typing import Callable, Dict, Optional
 from news_fetcher import fetch_news
 from sentiment_analyzer import analyze_news_sentiment
+from env_loader import get_tushare_token
 
 try:
     import pandas as pd
@@ -59,10 +60,10 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
 
 def get_tushare_pro():
     """初始化tushare pro客户端"""
-    token = os.getenv("TUSHARE_TOKEN") or os.getenv("TS_TOKEN")
+    token = get_tushare_token()
     if not token:
         print("错误: 未检测到 TUSHARE_TOKEN 环境变量")
-        print("请先设置: export TUSHARE_TOKEN=你的token")
+        print("请设置环境变量，或在 ~/.aj-skills/.env 中配置 TUSHARE_TOKEN")
         sys.exit(1)
 
     ts.set_token(token)

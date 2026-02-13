@@ -32,9 +32,26 @@ source .venv/bin/activate
 pip install tushare pandas numpy
 ```
 
-Tushare token 约定从 `~/.aj-stock-analysis/.env` 读取：
+### Environment Bootstrap（执行前必须自动完成）
+在运行任何脚本前，先在当前项目目录执行：
+
 ```bash
-# ~/.aj-stock-analysis/.env
+cd <skill项目目录>
+if [ ! -d ".venv" ]; then
+  python3 -m venv .venv
+fi
+source .venv/bin/activate
+python3 -m pip install -U pip
+python3 -m pip install tushare pandas numpy
+```
+
+说明：
+- `.venv` 必须位于 skill 项目根目录下（不是全局目录）
+- 若 `import tushare` 失败，必须先执行上述 bootstrap，再继续后续分析流程
+
+Tushare token 约定从 `~/.aj-skills/.env` 读取：
+```bash
+# ~/.aj-skills/.env
 TUSHARE_TOKEN=your_token
 ```
 
@@ -151,6 +168,17 @@ python scripts/stock_screener.py \
    - **标准级**：财务分析 + 估值 + 行业对比 + 风险提示
    - **深度级**：完整调研报告，包含历史数据追踪
 
+### Step 1.5: Prepare Output Directory
+
+单只股票分析时，skill 需要自动创建输出目录，命名规则：
+- `${股票名称}_${股票代码}`
+
+示例：
+```bash
+stock_dir="贵州茅台_600519"
+mkdir -p "${stock_dir}"
+```
+
 ### Step 2: Fetch Stock Data
 
 ```bash
@@ -161,7 +189,7 @@ python scripts/data_fetcher.py \
     --news-days 7 \
     --news-limit 20 \
     --years 5 \
-    --output stock_data.json
+    --output "${stock_dir}/stock_data.json"
 ```
 
 **参数说明：**
@@ -169,7 +197,7 @@ python scripts/data_fetcher.py \
 - `--data-type`: 数据类型 (basic/financial/valuation/holder/news/all)
 - `--years`: 获取多少年的历史数据
 - `--token`: tushare token（优先于环境变量）
-- 默认读取：`~/.aj-stock-analysis/.env` 中的 `TUSHARE_TOKEN`
+- 默认读取：`~/.aj-skills/.env` 中的 `TUSHARE_TOKEN`
 - `--with-news`: 附加新闻与舆情
 - `--news-days`: 新闻窗口天数
 - `--news-limit`: 新闻最大条数
@@ -181,17 +209,17 @@ python scripts/data_fetcher.py \
 ### 可选：单独执行新闻舆情流程
 
 ```bash
-python scripts/news_fetcher.py --code 600519 --name 贵州茅台 --days 7 --limit 20 --output news.json
-python scripts/sentiment_analyzer.py --input news.json --output sentiment.json
+python scripts/news_fetcher.py --code 600519 --name 贵州茅台 --days 7 --limit 20 --output "${stock_dir}/news.json"
+python scripts/sentiment_analyzer.py --input "${stock_dir}/news.json" --output "${stock_dir}/sentiment.json"
 ```
 
 ### Step 3: Run Financial Analysis
 
 ```bash
 python scripts/financial_analyzer.py \
-    --input stock_data.json \
+    --input "${stock_dir}/stock_data.json" \
     --level standard \
-    --output analysis_result.json
+    --output "${stock_dir}/analysis_result.json"
 ```
 
 **参数说明：**
@@ -203,11 +231,11 @@ python scripts/financial_analyzer.py \
 
 ```bash
 python scripts/valuation_calculator.py \
-    --input stock_data.json \
+    --input "${stock_dir}/stock_data.json" \
     --methods dcf,ddm,relative \
     --discount-rate 10 \
     --growth-rate 8 \
-    --output valuation_result.json
+    --output "${stock_dir}/valuation_result.json"
 ```
 
 **参数说明：**
@@ -225,6 +253,13 @@ python scripts/valuation_calculator.py \
 
 读取分析结果，参考 `templates/analysis_report.md` 模板生成中文分析报告。
 
+报告生成必检项（必须全部满足）：
+0. 最终报告必须落盘为 Markdown 文件（`.md`）
+1. 必须包含“新闻与舆情”章节
+2. 必须使用 `stock_data.json` 中的 `news_sentiment/news_items` 填充对应字段
+3. 若新闻抓取失败，需在报告中明确写出失败原因（来自 `news_sentiment.error`）
+4. 不允许省略模板中 `summary_title` 与“业绩与审计信号”章节
+
 报告结构（标准级）：
 1. **公司概况**：基本信息、主营业务
 2. **财务健康**：资产负债表分析
@@ -234,9 +269,34 @@ python scripts/valuation_calculator.py \
 6. **风险提示**：财务异常检测、股东减持
 7. **投资结论**：综合评分、操作建议
 
+报告标题规范：
+- `summary_title` 使用格式：`股票名称(股票代码)：总结性结论`
+- 示例：`贵州茅台(600519)：财务稳健，估值与风险匹配度较好`
+
+
+输出文件：
+```
+${stock_dir}/final_report.md
+```
+
 ---
 
 ## Workflow 3: Industry Comparison (行业对比)
+
+### CLI方式（板块分析，推荐）
+
+```bash
+# 1) 获取板块数据
+python scripts/sector_fetcher.py \
+  --sector-name "算力板块" \
+  --sector-file config/sector_computing_default.json \
+  --output "${stock_dir}/sector_data.json"
+
+# 2) 生成板块分析结果 + Markdown报告
+python scripts/sector_analyze.py \
+  --input "${stock_dir}/sector_data.json" \
+  --output "${stock_dir}/sector_analysis.json"
+```
 
 ### Step 1: Collect Comparison Targets
 

@@ -9,12 +9,12 @@ A股股票筛选器
 
 import argparse
 import json
-import os
 import sys
 import time
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Dict, List
+from env_loader import get_tushare_token
 
 try:
     import numpy as np
@@ -90,10 +90,10 @@ class StockScreener:
 
     def __init__(self, token: str = None, quiet: bool = False):
         self.quiet = quiet
-        token = token or os.getenv("TUSHARE_TOKEN") or os.getenv("TS_TOKEN")
+        token = token or get_tushare_token()
         if not token:
             print("错误: 未检测到 TUSHARE_TOKEN 环境变量")
-            print("请先设置: export TUSHARE_TOKEN=你的token")
+            print("请设置环境变量，或在 ~/.aj-skills/.env 中配置 TUSHARE_TOKEN")
             sys.exit(1)
 
         ts.set_token(token)

@@ -8,6 +8,7 @@ A股财务分析模块
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime
 from typing import Optional, List, Dict
@@ -163,12 +164,14 @@ class FinancialAnalyzer:
         }
 
         # 观察分析
-        observation_checks = [
-            (ar_days and ar_days > 90, f"应收账款周转天数较长 ({ar_days:.0f}天)，回款较慢"),
-            (inventory_days and inventory_days > 180, f"存货周转天数较长 ({inventory_days:.0f}天)，库存管理需关注"),
-            (asset_turnover and asset_turnover < 0.5, f"总资产周转率较低 ({asset_turnover:.2f})，资产利用效率有待提高"),
-        ]
-        result["observations"] = [msg for condition, msg in observation_checks if condition]
+        observations = []
+        if ar_days is not None and ar_days > 90:
+            observations.append(f"应收账款周转天数较长 ({ar_days:.0f}天)，回款较慢")
+        if inventory_days is not None and inventory_days > 180:
+            observations.append(f"存货周转天数较长 ({inventory_days:.0f}天)，库存管理需关注")
+        if asset_turnover is not None and asset_turnover < 0.5:
+            observations.append(f"总资产周转率较低 ({asset_turnover:.2f})，资产利用效率有待提高")
+        result["observations"] = observations
 
         if not result["observations"]:
             result["assessment"] = "良好 - 运营效率指标正常"
@@ -486,8 +489,25 @@ class FinancialAnalyzer:
             summary.get("news_sentiment", {}),
             performance,
         )
+        summary["summary_title"] = self._build_summary_title(summary)
 
         return summary
+
+    def _build_summary_title(self, summary: Dict) -> str:
+        """生成总结性标题。"""
+        name = summary.get("name", "")
+        code = summary.get("code", "")
+        score = summary.get("score", 50)
+        risk_level = summary.get("anomalies", {}).get("risk_level", summary.get("risk_level", "低"))
+
+        if score >= 80 and risk_level in ["低", "中"]:
+            conclusion = "财务稳健，估值与风险匹配度较好"
+        elif score >= 65:
+            conclusion = "基本面中等偏强，建议持续跟踪"
+        else:
+            conclusion = "基本面或风险信号偏弱，建议谨慎评估"
+
+        return f"{name}({code})：{conclusion}"
 
     def _calculate_score(self, profitability, solvency, growth, anomalies, news_sentiment=None, performance=None) -> int:
         """计算综合评分 (0-100)"""
@@ -586,6 +606,57 @@ class FinancialAnalyzer:
 
 
 def main():
+    def render_markdown(result: Dict) -> str:
+        title = result.get("summary_title") or f"{result.get('name','')}({result.get('code','')})：综合分析"
+        lines = [f"# {result.get('name','')}（{result.get('code','')}）财务分析报告", "", f"**总结标题**: {title}", ""]
+        lines.append(f"- 分析时间: {result.get('analysis_date','')}")
+        lines.append(f"- 分析级别: {result.get('level','')}")
+        lines.append(f"- 综合评分: {result.get('score','')}")
+        lines.append("")
+
+        if isinstance(result.get("profitability"), dict):
+            lines.append("## 盈利能力")
+            lines.append(result["profitability"].get("assessment", ""))
+            lines.append("")
+
+        if isinstance(result.get("solvency"), dict):
+            lines.append("## 偿债能力")
+            lines.append(result["solvency"].get("assessment", ""))
+            lines.append("")
+
+        if isinstance(result.get("growth"), dict):
+            lines.append("## 成长性")
+            lines.append(result["growth"].get("assessment", ""))
+            lines.append("")
+
+        perf = result.get("performance", {})
+        if isinstance(perf, dict):
+            lines.append("## 业绩与审计信号")
+            lines.append(f"- 综合评估: {perf.get('assessment', '中性')}")
+            for signal in perf.get("signals", []):
+                lines.append(f"- {signal}")
+            lines.append("")
+
+        news = result.get("news_sentiment", {})
+        if isinstance(news, dict):
+            lines.append("## 新闻与舆情")
+            lines.append(f"- 新闻条数: {news.get('news_count', 0)}")
+            lines.append(f"- 综合情绪分: {news.get('overall_sentiment', 0)}")
+            lines.append(f"- 风险等级: {news.get('risk_level', '低')}")
+            if news.get("error"):
+                lines.append(f"- 抓取异常: {news.get('error')}")
+            lines.append("")
+
+        anomalies = result.get("anomalies", {})
+        if isinstance(anomalies, dict):
+            lines.append("## 风险提示")
+            lines.append(f"- 风险等级: {anomalies.get('risk_level', '低')}")
+            for s in anomalies.get("signals", []):
+                lines.append(f"- {s.get('type','')}: {s.get('description','')}")
+            lines.append("")
+
+        return "\n".join(lines)
+
     def format_table(headers, rows):
         widths = [len(str(h)) for h in headers]
         for row in rows:
@@ -608,6 +679,7 @@ def main():
     parser.add_argument("--format", choices=["json", "table"], default="json", help="输出格式")
     parser.add_argument("--quiet", action="store_true", help="静默模式")
     parser.add_argument("--output", type=str, help="输出文件路径 (JSON)")
+    parser.add_argument("--report-md", type=str, help="输出Markdown报告路径（默认同目录 analysis_report.md）")
 
     args = parser.parse_args()
 
@@ -652,6 +724,19 @@ def main():
                 print(format_table(["代码", "名称", "评分", "盈利评估", "风险等级"], rows))
         else:
             print(output_json)
+
+    # 单股模式必须产出Markdown报告
+    if args.mode == "single":
+        if args.report_md:
+            report_md_path = args.report_md
+        elif args.output:
+            report_md_path = os.path.join(os.path.dirname(args.output) or ".", "analysis_report.md")
+        else:
+            report_md_path = "analysis_report.md"
+        with open(report_md_path, "w", encoding="utf-8") as f:
+            f.write(render_markdown(result))
+        if not args.quiet:
+            print(f"Markdown报告已保存到: {report_md_path}")
 
 
 if __name__ == "__main__":

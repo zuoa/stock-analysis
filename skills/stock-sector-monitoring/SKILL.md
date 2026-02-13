@@ -35,11 +35,12 @@ python3 -m pip install -U pip
 python3 -m pip install tushare pandas
 ```
 
-Token：
-
+Tushare token 约定从 `~/.aj-skills/.env` 读取：
 ```bash
-export TUSHARE_TOKEN=YOUR_TOKEN
+# ~/.aj-skills/.env
+TUSHARE_TOKEN=your_token
 ```
+
 
 ## Core Workflow
 

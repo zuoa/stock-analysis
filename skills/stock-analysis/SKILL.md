@@ -279,7 +279,17 @@ python scripts/valuation_calculator.py \
 ${stock_dir}/final_report.md
 ```
 
+
+### Step 6: humanize Output
+读取 `${stock_dir}/final_report.md`，并调用 `humanizer-zh` skill 进行润色和优化。
+
+输出文件：
+```
+${stock_dir}/final_report_humanized.md
+``` 
+
 ---
+
 
 ## Workflow 3: Industry Comparison (行业对比)
 

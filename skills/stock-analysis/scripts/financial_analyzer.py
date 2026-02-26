@@ -9,8 +9,10 @@ A股财务分析模块
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Dict
 
 try:
@@ -26,6 +28,9 @@ from data_contract import ensure_stock_data
 
 class FinancialAnalyzer:
     """财务分析器"""
+
+    FUNDAMENTAL_WEIGHT = 0.4
+    REALTIME_WEIGHT = 0.6
 
     def __init__(self, stock_data: Dict = None):
         self.stock_data = stock_data or {}
@@ -479,6 +484,8 @@ class FinancialAnalyzer:
             summary["news_sentiment"] = self.stock_data.get("news_sentiment", {})
             if isinstance(self.stock_data.get("realtime_metrics"), dict):
                 summary["realtime_metrics"] = self.stock_data.get("realtime_metrics", {})
+            if isinstance(self.stock_data.get("event_window"), dict):
+                summary["event_window"] = self.stock_data.get("event_window", {})
 
             if level == "deep":
                 summary["historical_indicators"] = self.stock_data.get('financial_indicators', [])
@@ -492,11 +499,13 @@ class FinancialAnalyzer:
             performance,
         )
         realtime_score = self._calculate_realtime_score()
+        event_window_score = self._calculate_event_window_score()
         summary["fundamental_score"] = fundamental_score
         summary["realtime_score"] = realtime_score
+        summary["event_window_score"] = event_window_score
         summary["score_weights"] = {
-            "fundamental": 0.6 if realtime_score is not None else 1.0,
-            "realtime": 0.4 if realtime_score is not None else 0.0,
+            "fundamental": self.FUNDAMENTAL_WEIGHT if realtime_score is not None else 1.0,
+            "realtime": self.REALTIME_WEIGHT if realtime_score is not None else 0.0,
         }
         summary["score"] = self._blend_total_score(fundamental_score, realtime_score)
         summary["summary_title"] = self._build_summary_title(summary)
@@ -598,11 +607,24 @@ class FinancialAnalyzer:
         score = trend * 0.45 + confirm * 0.30 + (100 - risk_penalty) * 0.25 - chip_penalty
         return max(0.0, min(100.0, score))
 
+    def _calculate_event_window_score(self) -> Optional[float]:
+        """读取事件窗口分，如缺失则返回 None。"""
+        ew = self.stock_data.get("event_window")
+        if not isinstance(ew, dict):
+            return None
+        score = self._safe_float(ew.get("event_window_score"))
+        if score is None:
+            return None
+        return max(0.0, min(100.0, score))
+
     def _blend_total_score(self, fundamental_score: int, realtime_score: Optional[float]) -> int:
-        """按 6:4 融合财务分与实时分（实时缺失时退化为财务分）。"""
+        """按 4:6 融合财务分与实时分（实时缺失时退化为财务分）。"""
         if realtime_score is None:
             return int(max(0, min(100, round(fundamental_score))))
-        total = fundamental_score * 0.6 + realtime_score * 0.4
+        total = (
+            fundamental_score * self.FUNDAMENTAL_WEIGHT
+            + realtime_score * self.REALTIME_WEIGHT
+        )
         return int(max(0, min(100, round(total))))
 
     def compare_stocks(self, stocks_data: List[Dict]) -> Dict:
@@ -647,8 +669,331 @@ class FinancialAnalyzer:
             return None
 
 
+def _fmt_num(val, ndigits: int = 2) -> str:
+    if val is None or val == "":
+        return "-"
+    try:
+        return f"{float(val):.{ndigits}f}"
+    except Exception:
+        return str(val)
+
+
+def _assessment_to_score(text: str) -> float:
+    s = str(text or "")
+    if "优秀" in s or "积极" in s or "稳健" in s:
+        return 85.0
+    if "良好" in s or "较强" in s:
+        return 75.0
+    if "一般" in s or "中性" in s:
+        return 60.0
+    if "需关注" in s or "较弱" in s or "偏弱" in s:
+        return 45.0
+    return 60.0
+
+
+def _build_main_business(stock_data: Dict) -> str:
+    perf = stock_data.get("performance_data", {}) if isinstance(stock_data, dict) else {}
+    main_business = perf.get("main_business", {}) if isinstance(perf, dict) else {}
+    by_product = main_business.get("by_product", []) if isinstance(main_business, dict) else []
+    if by_product:
+        rows = []
+        for item in by_product[:3]:
+            name = item.get("bz_item", "-")
+            sales = _fmt_num(item.get("bz_sales"), 0)
+            rows.append(f"- {name}：{sales}")
+        return "\n".join(rows)
+    return "- 暂无主营构成数据"
+
+
+def _build_realtime_conclusion(rt: Dict) -> str:
+    if not isinstance(rt, dict) or not rt:
+        return "未启用实时指标，建议开启 `--with-realtime` 获取趋势/资金/风险/筹码的动态判断。"
+
+    score = float(rt.get("realtime_score", 0) or 0)
+    trend = float((rt.get("trend", {}) or {}).get("trend_score", 50) or 50)
+    confirm = float((rt.get("confirm", {}) or {}).get("confirm_score", 50) or 50)
+    risk_penalty = float((rt.get("risk", {}) or {}).get("risk_penalty", 20) or 20)
+    chip_penalty = float((rt.get("chip", {}) or {}).get("chip_penalty", 0) or 0)
+
+    if score >= 70 and trend >= 60 and confirm >= 55 and risk_penalty <= 30 and chip_penalty <= 10:
+        return "实时景气度偏强：趋势与成交确认较好，风险与筹码压力可控。"
+    if score <= 45 or risk_penalty >= 55 or chip_penalty >= 20:
+        return "实时信号偏弱：风险或筹码压力较大，建议降低仓位并等待确认。"
+    return "实时信号中性：趋势与确认存在分歧，建议结合后续资金连续性与回撤控制观察。"
+
+
+def _build_event_window_conclusion(ew: Dict) -> str:
+    if not isinstance(ew, dict) or not ew:
+        return "未启用事件窗口分析，建议开启 data_fetcher 的 `--with-event-window` 评估事件冲击的持续性。"
+
+    score = float(ew.get("event_window_score", 50) or 50)
+    summary = ew.get("summary", {}) if isinstance(ew.get("summary"), dict) else {}
+    avg_abn_3 = _fmt_num(summary.get("avg_abnormal_3d_pct"))
+    avg_post_3 = _fmt_num(summary.get("avg_post_3d_pct"))
+    matched = int(ew.get("matched_event_count", 0) or 0)
+
+    if score >= 65:
+        return f"事件窗口偏强：已匹配{matched}个事件，3日平均反应较好（超额约 {avg_abn_3}% / 绝对约 {avg_post_3}%）。"
+    if score <= 40:
+        return f"事件窗口偏弱：已匹配{matched}个事件，事件后收益承压（超额约 {avg_abn_3}% / 绝对约 {avg_post_3}%）。"
+    return f"事件窗口中性：已匹配{matched}个事件，短期反应分化（超额约 {avg_abn_3}% / 绝对约 {avg_post_3}%）。"
+
+
+def build_report_context(stock_data: Dict, result: Dict) -> Dict:
+    basic = stock_data.get("basic_info", {}) if isinstance(stock_data, dict) else {}
+    valuation = stock_data.get("valuation", {}) if isinstance(stock_data, dict) else {}
+    val_latest = valuation.get("latest", {}) if isinstance(valuation, dict) else {}
+    price = stock_data.get("price", {}) if isinstance(stock_data, dict) else {}
+
+    profitability = result.get("profitability", {}) if isinstance(result.get("profitability"), dict) else {}
+    profitability_metrics = profitability.get("metrics", {}) if isinstance(profitability, dict) else {}
+    solvency = result.get("solvency", {}) if isinstance(result.get("solvency"), dict) else {}
+    solvency_metrics = solvency.get("metrics", {}) if isinstance(solvency, dict) else {}
+    growth = result.get("growth", {}) if isinstance(result.get("growth"), dict) else {}
+    growth_metrics = growth.get("metrics", {}) if isinstance(growth, dict) else {}
+    dupont = result.get("dupont", {}) if isinstance(result.get("dupont"), dict) else {}
+    dupont_dec = dupont.get("decomposition", {}) if isinstance(dupont, dict) else {}
+    anomalies = (result.get("anomalies", {}) or {}).get("signals", [])
+    perf = result.get("performance", {}) if isinstance(result.get("performance"), dict) else {}
+    news = result.get("news_sentiment", {}) if isinstance(result.get("news_sentiment"), dict) else {}
+    rt = result.get("realtime_metrics", {}) if isinstance(result.get("realtime_metrics"), dict) else {}
+    ew = result.get("event_window", {}) if isinstance(result.get("event_window"), dict) else {}
+    trend = rt.get("trend", {}) if isinstance(rt.get("trend"), dict) else {}
+    confirm = rt.get("confirm", {}) if isinstance(rt.get("confirm"), dict) else {}
+    risk = rt.get("risk", {}) if isinstance(rt.get("risk"), dict) else {}
+    chip = rt.get("chip", {}) if isinstance(rt.get("chip"), dict) else {}
+    momentum = trend.get("momentum_pct", {}) if isinstance(trend.get("momentum_pct"), dict) else {}
+    relative = trend.get("relative_strength_pct", {}) if isinstance(trend.get("relative_strength_pct"), dict) else {}
+    ew_summary = ew.get("summary", {}) if isinstance(ew.get("summary"), dict) else {}
+
+    score_weights = result.get("score_weights", {}) if isinstance(result.get("score_weights"), dict) else {}
+    fundamental_weight = float(score_weights.get("fundamental", 1.0) or 1.0)
+    realtime_weight = float(score_weights.get("realtime", 0.0) or 0.0)
+    fundamental_score = float(result.get("fundamental_score", result.get("score", 0)) or 0)
+    realtime_score = float(result.get("realtime_score", 0) or 0)
+
+    profitability_score = _assessment_to_score(profitability.get("assessment", ""))
+    safety_score = max(0.0, 100.0 - len(solvency.get("risks", []) if isinstance(solvency, dict) else []) * 20.0)
+    growth_score = _assessment_to_score(growth.get("assessment", ""))
+    pe_percentile = valuation.get("pe_percentile")
+    try:
+        valuation_score = max(0.0, 100.0 - abs(float(pe_percentile or 50) - 35.0))
+    except Exception:
+        valuation_score = 60.0
+
+    ctx = {
+        "stock_code": result.get("code", stock_data.get("code", "-")),
+        "stock_name": result.get("name", basic.get("name", "-")),
+        "summary_title": result.get("summary_title", "-"),
+        "analysis_date": result.get("analysis_date", ""),
+        "analysis_level": result.get("level", "standard"),
+        "overall_score": _fmt_num(result.get("score"), 0),
+        "fundamental_score": _fmt_num(result.get("fundamental_score"), 0),
+        "realtime_score": _fmt_num(result.get("realtime_score"), 0),
+        "fundamental_weight_pct": _fmt_num(fundamental_weight * 100, 0),
+        "realtime_weight_pct": _fmt_num(realtime_weight * 100, 0),
+        "industry": basic.get("industry", "-"),
+        "market_cap": _fmt_num(basic.get("market_cap"), 0),
+        "float_cap": _fmt_num(basic.get("float_cap"), 0),
+        "listing_date": basic.get("listing_date", "-"),
+        "main_business": _build_main_business(stock_data),
+        "roe": _fmt_num(profitability_metrics.get("当前ROE")),
+        "roa": _fmt_num(profitability_metrics.get("当前ROA")),
+        "gross_margin": _fmt_num(profitability_metrics.get("当前毛利率")),
+        "net_margin": _fmt_num(profitability_metrics.get("当前净利率")),
+        "industry_roe": "-",
+        "industry_roa": "-",
+        "industry_gross_margin": "-",
+        "industry_net_margin": "-",
+        "roe_assessment": profitability.get("assessment", "-"),
+        "roa_assessment": "-",
+        "gross_margin_assessment": "-",
+        "net_margin_assessment": "-",
+        "asset_turnover": _fmt_num(dupont_dec.get("资产周转率"), 3),
+        "equity_multiplier": _fmt_num(dupont_dec.get("权益乘数"), 3),
+        "roe_driver": dupont.get("driver", "-"),
+        "debt_ratio": _fmt_num(solvency_metrics.get("资产负债率")),
+        "current_ratio": _fmt_num(solvency_metrics.get("流动比率"), 3),
+        "quick_ratio": _fmt_num(solvency_metrics.get("速动比率"), 3),
+        "interest_coverage": "-",
+        "debt_ratio_status": "需关注" if (solvency_metrics.get("资产负债率") or 0) > 70 else "正常",
+        "current_ratio_status": "偏低" if (solvency_metrics.get("流动比率") or 0) < 1 else "正常",
+        "quick_ratio_status": "偏低" if (solvency_metrics.get("速动比率") or 0) < 0.8 else "正常",
+        "interest_coverage_status": "-",
+        "ar_days": "-",
+        "ar_trend": "-",
+        "inventory_days": "-",
+        "inventory_trend": "-",
+        "asset_turnover_trend": "-",
+        "revenue_growth": _fmt_num(growth_metrics.get("最近营收增长率")),
+        "avg_revenue_growth": _fmt_num(growth_metrics.get("平均营收增长率")),
+        "revenue_trend": "；".join(growth.get("trend", [])[:1]) if isinstance(growth, dict) else "-",
+        "profit_growth": _fmt_num(growth_metrics.get("最近净利润增长率")),
+        "avg_profit_growth": _fmt_num(growth_metrics.get("平均净利润增长率")),
+        "profit_trend": "；".join(growth.get("trend", [])[1:2]) if isinstance(growth, dict) else "-",
+        "eps_growth": "-",
+        "avg_eps_growth": "-",
+        "eps_trend": "-",
+        "growth_assessment": growth.get("assessment", "-"),
+        "trend_score": _fmt_num(trend.get("trend_score")),
+        "return_1d": _fmt_num(momentum.get("return_1d")),
+        "return_5d": _fmt_num(momentum.get("return_5d")),
+        "return_20d": _fmt_num(momentum.get("return_20d")),
+        "return_60d": _fmt_num(momentum.get("return_60d")),
+        "vs_benchmark_1d": _fmt_num(relative.get("vs_benchmark_1d")),
+        "vs_benchmark_5d": _fmt_num(relative.get("vs_benchmark_5d")),
+        "vs_benchmark_20d": _fmt_num(relative.get("vs_benchmark_20d")),
+        "vs_benchmark_60d": _fmt_num(relative.get("vs_benchmark_60d")),
+        "confirm_score": _fmt_num(confirm.get("confirm_score")),
+        "amount_ratio_20d": _fmt_num(confirm.get("amount_ratio_20d"), 4),
+        "volume_ratio": _fmt_num(confirm.get("volume_ratio"), 4),
+        "turnover_rate": _fmt_num(confirm.get("turnover_rate"), 4),
+        "net_inflow_ratio": _fmt_num(confirm.get("net_inflow_ratio"), 4),
+        "positive_days_5": _fmt_num(confirm.get("positive_days_5"), 0),
+        "risk_penalty": _fmt_num(risk.get("risk_penalty")),
+        "intraday_amplitude_pct": _fmt_num(risk.get("intraday_amplitude_pct")),
+        "realized_volatility_20d_pct": _fmt_num(risk.get("realized_volatility_20d_pct")),
+        "downside_volatility_20d_pct": _fmt_num(risk.get("downside_volatility_20d_pct")),
+        "max_drawdown_window_pct": _fmt_num(risk.get("max_drawdown_window_pct")),
+        "chip_penalty": _fmt_num(chip.get("chip_penalty")),
+        "unlock_30d_ratio": _fmt_num(chip.get("unlock_30d_ratio")),
+        "unlock_90d_ratio": _fmt_num(chip.get("unlock_90d_ratio")),
+        "reduction_density_30d": _fmt_num(chip.get("reduction_density_30d"), 4),
+        "repurchase_ratio_90d": _fmt_num(chip.get("repurchase_ratio_90d")),
+        "realtime_conclusion": _build_realtime_conclusion(rt),
+        "event_window_score": _fmt_num(result.get("event_window_score"), 0),
+        "event_window_pre_days": _fmt_num(ew.get("pre_days"), 0),
+        "event_window_post_days": ",".join(str(x) for x in (ew.get("post_days") or [])) if ew.get("post_days") else "-",
+        "event_window_event_count": _fmt_num(ew.get("event_count"), 0),
+        "event_window_matched_count": _fmt_num(ew.get("matched_event_count"), 0),
+        "ew_avg_post_1d_pct": _fmt_num(ew_summary.get("avg_post_1d_pct")),
+        "ew_avg_post_3d_pct": _fmt_num(ew_summary.get("avg_post_3d_pct")),
+        "ew_avg_post_5d_pct": _fmt_num(ew_summary.get("avg_post_5d_pct")),
+        "ew_avg_abnormal_1d_pct": _fmt_num(ew_summary.get("avg_abnormal_1d_pct")),
+        "ew_avg_abnormal_3d_pct": _fmt_num(ew_summary.get("avg_abnormal_3d_pct")),
+        "ew_avg_abnormal_5d_pct": _fmt_num(ew_summary.get("avg_abnormal_5d_pct")),
+        "ew_positive_ratio_3d": _fmt_num(
+            (ew_summary.get("positive_ratio_3d") * 100) if ew_summary.get("positive_ratio_3d") is not None else None
+        ),
+        "ew_worst_post_5d_pct": _fmt_num(ew_summary.get("worst_post_5d_pct")),
+        "event_window_conclusion": _build_event_window_conclusion(ew),
+        "pe_ttm": _fmt_num(basic.get("pe_ttm", val_latest.get("pe_ttm"))),
+        "pb": _fmt_num(basic.get("pb", val_latest.get("pb"))),
+        "ps": "-",
+        "pe_percentile": _fmt_num(valuation.get("pe_percentile")),
+        "pb_percentile": _fmt_num(valuation.get("pb_percentile")),
+        "ps_percentile": "-",
+        "industry_pe": "-",
+        "industry_pb": "-",
+        "industry_ps": "-",
+        "dcf_value": "-",
+        "discount_rate": "-",
+        "terminal_growth": "-",
+        "ddm_value": "-",
+        "dividend_growth": "-",
+        "relative_value": "-",
+        "avg_value": "-",
+        "current_price": _fmt_num(price.get("latest_price")),
+        "margin_of_safety": "-",
+        "safety_price": "-",
+        "valuation_conclusion": "-",
+        "performance_assessment": perf.get("assessment", "-"),
+        "risk_level": (result.get("anomalies", {}) or {}).get("risk_level", result.get("risk_level", "低")),
+        "news_count": news.get("news_count", 0),
+        "overall_sentiment": _fmt_num(news.get("overall_sentiment"), 4),
+        "news_risk_level": news.get("risk_level", "低"),
+        "industry_risks": "需结合行业与政策变化持续跟踪。",
+        "profitability_score": _fmt_num(profitability_score, 0),
+        "safety_score": _fmt_num(safety_score, 0),
+        "growth_score": _fmt_num(growth_score, 0),
+        "valuation_score": _fmt_num(valuation_score, 0),
+        "profitability_weighted": _fmt_num(profitability_score * 0.30, 1),
+        "safety_weighted": _fmt_num(safety_score * 0.20, 1),
+        "growth_weighted": _fmt_num(growth_score * 0.25, 1),
+        "valuation_weighted": _fmt_num(valuation_score * 0.25, 1),
+        "fundamental_weighted_score": _fmt_num(fundamental_score * fundamental_weight, 1),
+        "realtime_weighted_score": _fmt_num(realtime_score * realtime_weight, 1),
+        "investment_recommendation": result.get("summary_title", "-"),
+        "report_time": datetime.now().isoformat(),
+        "performance_signals": perf.get("signals", []) if isinstance(perf, dict) else [],
+        "anomalies": anomalies if isinstance(anomalies, list) else [],
+        "top_negative_events": news.get("top_negative_events", []) if isinstance(news, dict) else [],
+        "event_window_top_positive": ew.get("top_positive_events", []) if isinstance(ew, dict) else [],
+        "event_window_top_negative": ew.get("top_negative_events", []) if isinstance(ew, dict) else [],
+        "holder_risks": [],
+        "key_observations": [
+            result.get("summary_title", ""),
+            _build_realtime_conclusion(rt),
+            _build_event_window_conclusion(ew),
+        ],
+    }
+    return ctx
+
+
+def _render_template_content(template: str, context: Dict) -> str:
+    text = template
+
+    if_pattern = re.compile(r"{{#if\s+([a-zA-Z0-9_]+)}}(.*?)(?:{{else}}(.*?))?{{/if}}", re.DOTALL)
+    each_pattern = re.compile(r"{{#each\s+([a-zA-Z0-9_]+)}}(.*?){{/each}}", re.DOTALL)
+    var_pattern = re.compile(r"{{\s*([a-zA-Z0-9_]+)\s*}}")
+    this_field_pattern = re.compile(r"{{\s*this\.([a-zA-Z0-9_]+)\s*}}")
+
+    def as_text(v) -> str:
+        if v is None:
+            return "-"
+        if isinstance(v, (int, float, str)):
+            return str(v)
+        return str(v)
+
+    while True:
+        m = if_pattern.search(text)
+        if not m:
+            break
+        key, yes_block, no_block = m.group(1), m.group(2), (m.group(3) or "")
+        chosen = yes_block if context.get(key) else no_block
+        text = text[:m.start()] + chosen + text[m.end():]
+
+    while True:
+        m = each_pattern.search(text)
+        if not m:
+            break
+        key, block = m.group(1), m.group(2)
+        items = context.get(key) or []
+        rendered_items = []
+        for item in items:
+            item_block = block
+            if isinstance(item, dict):
+                item_block = this_field_pattern.sub(lambda mm: as_text(item.get(mm.group(1), "-")), item_block)
+                item_block = item_block.replace("{{this}}", as_text(item))
+            else:
+                item_block = item_block.replace("{{this}}", as_text(item))
+            rendered_items.append(item_block)
+        text = text[:m.start()] + "".join(rendered_items) + text[m.end():]
+
+    text = var_pattern.sub(lambda m: as_text(context.get(m.group(1), "-")), text)
+    text = re.sub(r"{{[^{}]+}}", "-", text)
+    return text
+
+
+def render_markdown_from_template(stock_data: Dict, result: Dict) -> str:
+    template_path = Path(__file__).resolve().parents[1] / "templates" / "analysis_report.md"
+    if not template_path.exists():
+        raise FileNotFoundError(f"模板不存在: {template_path}")
+    template = template_path.read_text(encoding="utf-8")
+    context = build_report_context(stock_data, result)
+    return _render_template_content(template, context)
+
+
 def main():
     def render_markdown(result: Dict) -> str:
+        def _fmt_num(val, ndigits: int = 2, suffix: str = "") -> str:
+            if val is None or val == "":
+                return "-"
+            try:
+                return f"{float(val):.{ndigits}f}{suffix}"
+            except Exception:
+                return str(val)
+
         title = result.get("summary_title") or f"{result.get('name','')}({result.get('code','')})：综合分析"
         lines = [f"# {result.get('name','')}（{result.get('code','')}）财务分析报告", "", f"**总结标题**: {title}", ""]
         lines.append(f"- 分析时间: {result.get('analysis_date','')}")
@@ -672,6 +1017,66 @@ def main():
         if isinstance(result.get("growth"), dict):
             lines.append("## 成长性")
             lines.append(result["growth"].get("assessment", ""))
+            lines.append("")
+
+        rt = result.get("realtime_metrics", {})
+        if isinstance(rt, dict) and rt:
+            trend = rt.get("trend", {}) if isinstance(rt.get("trend"), dict) else {}
+            confirm = rt.get("confirm", {}) if isinstance(rt.get("confirm"), dict) else {}
+            risk = rt.get("risk", {}) if isinstance(rt.get("risk"), dict) else {}
+            chip = rt.get("chip", {}) if isinstance(rt.get("chip"), dict) else {}
+            momentum = trend.get("momentum_pct", {}) if isinstance(trend.get("momentum_pct"), dict) else {}
+            rel = trend.get("relative_strength_pct", {}) if isinstance(trend.get("relative_strength_pct"), dict) else {}
+
+            lines.append("## 实时指标看板")
+            lines.append(f"- 基准指数: {rt.get('benchmark', '-')}")
+            lines.append(f"- 计算窗口: {rt.get('window_days', '-')}日")
+            if rt.get("benchmark_error"):
+                lines.append(f"- 基准数据异常: {rt.get('benchmark_error')}")
+            lines.append("")
+            lines.append("| 维度 | 指标 | 数值 |")
+            lines.append("|------|------|------|")
+            lines.append(f"| 趋势 | 趋势分 | {_fmt_num(trend.get('trend_score'))} |")
+            lines.append(f"| 趋势 | 1/5/20/60日收益(%) | {_fmt_num(momentum.get('return_1d'))} / {_fmt_num(momentum.get('return_5d'))} / {_fmt_num(momentum.get('return_20d'))} / {_fmt_num(momentum.get('return_60d'))} |")
+            lines.append(f"| 趋势 | 相对基准1/5/20/60(%) | {_fmt_num(rel.get('vs_benchmark_1d'))} / {_fmt_num(rel.get('vs_benchmark_5d'))} / {_fmt_num(rel.get('vs_benchmark_20d'))} / {_fmt_num(rel.get('vs_benchmark_60d'))} |")
+            lines.append(f"| 确认 | 确认分 | {_fmt_num(confirm.get('confirm_score'))} |")
+            lines.append(f"| 确认 | 成交额比20日均值 | {_fmt_num(confirm.get('amount_ratio_20d'), 4)} |")
+            lines.append(f"| 确认 | 量比/换手率 | {_fmt_num(confirm.get('volume_ratio'), 4)} / {_fmt_num(confirm.get('turnover_rate'), 4)} |")
+            lines.append(f"| 确认 | 资金净流入占比/近5日净流入天数 | {_fmt_num(confirm.get('net_inflow_ratio'), 4, '%')} / {_fmt_num(confirm.get('positive_days_5'), 0)} |")
+            lines.append(f"| 风险 | 风险扣分 | {_fmt_num(risk.get('risk_penalty'))} |")
+            lines.append(f"| 风险 | 振幅/实现波动/下行波动(%) | {_fmt_num(risk.get('intraday_amplitude_pct'))} / {_fmt_num(risk.get('realized_volatility_20d_pct'))} / {_fmt_num(risk.get('downside_volatility_20d_pct'))} |")
+            lines.append(f"| 风险 | 窗口最大回撤(%) | {_fmt_num(risk.get('max_drawdown_window_pct'))} |")
+            lines.append(f"| 筹码 | 筹码扣分 | {_fmt_num(chip.get('chip_penalty'))} |")
+            lines.append(f"| 筹码 | 解禁30/90天占比(%) | {_fmt_num(chip.get('unlock_30d_ratio'))} / {_fmt_num(chip.get('unlock_90d_ratio'))} |")
+            lines.append(f"| 筹码 | 减持密度/回购占比 | {_fmt_num(chip.get('reduction_density_30d'), 4)} / {_fmt_num(chip.get('repurchase_ratio_90d'))} |")
+            lines.append("")
+        elif result.get("realtime_score") is None:
+            lines.append("## 实时指标看板")
+            lines.append("- 未启用实时指标（可使用 data_fetcher 的 --with-realtime）。")
+            lines.append("")
+
+        ew = result.get("event_window", {})
+        if isinstance(ew, dict) and ew:
+            summary = ew.get("summary", {}) if isinstance(ew.get("summary"), dict) else {}
+            lines.append("## 事件窗口分析")
+            lines.append(f"- 事件窗口分: {_fmt_num(result.get('event_window_score'), 0)}")
+            lines.append(f"- 事件总数/匹配数: {ew.get('event_count', 0)} / {ew.get('matched_event_count', 0)}")
+            lines.append(f"- 窗口设置: 前{ew.get('pre_days', '-')}日, 后{','.join(str(x) for x in (ew.get('post_days') or []))}日")
+            lines.append("")
+            lines.append("| 指标 | 数值 |")
+            lines.append("|------|------|")
+            lines.append(f"| 平均后1/3/5日收益(%) | {_fmt_num(summary.get('avg_post_1d_pct'))} / {_fmt_num(summary.get('avg_post_3d_pct'))} / {_fmt_num(summary.get('avg_post_5d_pct'))} |")
+            lines.append(f"| 平均后1/3/5日超额收益(%) | {_fmt_num(summary.get('avg_abnormal_1d_pct'))} / {_fmt_num(summary.get('avg_abnormal_3d_pct'))} / {_fmt_num(summary.get('avg_abnormal_5d_pct'))} |")
+            pr = summary.get("positive_ratio_3d")
+            pr_text = _fmt_num(pr * 100 if pr is not None else None)
+            lines.append(f"| 后3日上涨占比(%) | {pr_text} |")
+            lines.append(f"| 最差后5日收益(%) | {_fmt_num(summary.get('worst_post_5d_pct'))} |")
+            lines.append("")
+            lines.append(f"- 结论: {_build_event_window_conclusion(ew)}")
+            lines.append("")
+        elif result.get("event_window_score") is None:
+            lines.append("## 事件窗口分析")
+            lines.append("- 未启用事件窗口分析（可使用 data_fetcher 的 --with-event-window）。")
             lines.append("")
 
         perf = result.get("performance", {})
@@ -778,8 +1183,12 @@ def main():
             report_md_path = os.path.join(os.path.dirname(args.output) or ".", "analysis_report.md")
         else:
             report_md_path = "analysis_report.md"
+        try:
+            md_content = render_markdown_from_template(data, result)
+        except Exception:
+            md_content = render_markdown(result)
         with open(report_md_path, "w", encoding="utf-8") as f:
-            f.write(render_markdown(result))
+            f.write(md_content)
         if not args.quiet:
             print(f"Markdown报告已保存到: {report_md_path}")
 

@@ -22,6 +22,7 @@ OPTIONAL_SECTIONS = [
     "flow_metrics",
     "chip_events",
     "realtime_metrics",
+    "event_window",
     "holder",
     "dividend",
     "news_items",
@@ -64,6 +65,7 @@ def validate_stock_data(data: Dict, required_sections: Optional[List[str]] = Non
         "flow_metrics",
         "chip_events",
         "realtime_metrics",
+        "event_window",
     ]:
         if key in data and data[key] is not None:
             expected_type = list if key in ["financial_indicators", "news_items"] else dict

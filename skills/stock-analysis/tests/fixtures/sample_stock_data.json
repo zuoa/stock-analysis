@@ -172,6 +172,46 @@
     "realtime_score": 60.5,
     "benchmark": "hs300"
   },
+  "event_window": {
+    "pre_days": 1,
+    "post_days": [
+      1,
+      3,
+      5
+    ],
+    "benchmark": "hs300",
+    "event_count": 4,
+    "matched_event_count": 4,
+    "coverage_ratio": 1.0,
+    "summary": {
+      "avg_post_1d_pct": 0.9,
+      "avg_post_3d_pct": 1.4,
+      "avg_post_5d_pct": 1.1,
+      "avg_abnormal_1d_pct": 0.3,
+      "avg_abnormal_3d_pct": 0.5,
+      "avg_abnormal_5d_pct": 0.4,
+      "positive_ratio_3d": 0.75,
+      "worst_post_5d_pct": -1.2
+    },
+    "event_window_score": 66.0,
+    "top_positive_events": [
+      {
+        "event_trade_date": "20260213",
+        "title": "贵州茅台发布年度分红方案，市场反应积极",
+        "abnormal_3d_pct": 1.3,
+        "post_3d_pct": 2.1
+      }
+    ],
+    "top_negative_events": [
+      {
+        "event_trade_date": "20260211",
+        "title": "白酒板块短期承压，部分机构下调预期",
+        "abnormal_3d_pct": -0.9,
+        "post_3d_pct": -1.1
+      }
+    ],
+    "events": []
+  },
   "holder": {
     "top_10_holders": [],
     "holder_count_history": []

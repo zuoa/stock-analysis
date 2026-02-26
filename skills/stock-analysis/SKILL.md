@@ -186,9 +186,14 @@ python scripts/data_fetcher.py \
     --code "600519" \
     --data-type all \
     --with-news \
+    --news-provider brave \
+    --brave-api-key "${BRAVE_API_KEY}" \
     --with-realtime \
+    --with-event-window \
     --benchmark hs300 \
     --realtime-window 60 \
+    --event-window-pre 1 \
+    --event-window-post 1,3,5 \
     --news-days 7 \
     --news-limit 20 \
     --years 5 \
@@ -201,13 +206,19 @@ python scripts/data_fetcher.py \
 - `--years`: 获取多少年的历史数据
 - `--token`: tushare token（优先于环境变量）
 - 默认读取：`~/.aj-skills/.env` 中的 `TUSHARE_TOKEN`
+- Brave 新闻搜索默认读取：`~/.aj-skills/.env` 中的 `BRAVE_API_KEY`
 - `--with-news`: 附加新闻与舆情
 - `--news-days`: 新闻窗口天数
 - `--news-limit`: 新闻最大条数
 - `--news-sources`: 新闻来源过滤（逗号分隔）
+- `--news-provider`: 新闻源 (auto/brave/tushare/rss)
+- `--brave-api-key`: Brave Search API Key（默认从 `~/.aj-skills/.env` 读取 `BRAVE_API_KEY`，也可显式传入）
 - `--with-realtime`: 附加实时指标（趋势/确认/风险/筹码）
+- `--with-event-window`: 附加事件窗口分析（事件后1/3/5日反应）
 - `--benchmark`: 相对强弱基准指数 (hs300/zz500/zz1000/cyb/kcb)
 - `--realtime-window`: 实时指标计算窗口（日）
+- `--event-window-pre`: 事件窗口前置天数
+- `--event-window-post`: 事件窗口后验天数（逗号分隔）
 - `--cache-ttl-min`: 缓存有效期（分钟）
 - `--format`: 输出格式 (json/table)
 - `--quiet`: 静默模式
@@ -216,7 +227,7 @@ python scripts/data_fetcher.py \
 ### 可选：单独执行新闻舆情流程
 
 ```bash
-python scripts/news_fetcher.py --code 600519 --name 贵州茅台 --days 7 --limit 20 --output "${stock_dir}/news.json"
+python scripts/news_fetcher.py --code 600519 --name 贵州茅台 --days 7 --limit 20 --provider brave --brave-api-key "${BRAVE_API_KEY}" --output "${stock_dir}/news.json"
 python scripts/sentiment_analyzer.py --input "${stock_dir}/news.json" --output "${stock_dir}/sentiment.json"
 ```
 
@@ -266,15 +277,20 @@ python scripts/valuation_calculator.py \
 2. 必须使用 `stock_data.json` 中的 `news_sentiment/news_items` 填充对应字段
 3. 若新闻抓取失败，需在报告中明确写出失败原因（来自 `news_sentiment.error`）
 4. 不允许省略模板中 `summary_title` 与“业绩与审计信号”章节
+5. 若 `stock_data.json` 包含 `realtime_metrics`，报告必须包含“实时指标看板”章节（趋势/确认/风险/筹码）
+6. 若 `stock_data.json` 包含 `event_window`，报告必须包含“事件窗口反应”内容（事件数、后1/3/5日收益、后1/3/5日超额收益）
+7. 若 `realtime_metrics` 存在，综合评分必须采用 **财务40% + 实时60%**（实时优先）
 
 报告结构（标准级）：
 1. **公司概况**：基本信息、主营业务
 2. **财务健康**：资产负债表分析
 3. **盈利能力**：杜邦分析、利润率趋势
 4. **成长性分析**：营收/利润增长趋势
-5. **估值分析**：DCF/DDM/相对估值
-6. **风险提示**：财务异常检测、股东减持
-7. **投资结论**：综合评分、操作建议
+5. **实时指标看板**：趋势/确认/风险/筹码
+6. **事件窗口分析**：事件后收益与超额收益
+7. **估值分析**：DCF/DDM/相对估值
+8. **风险提示**：财务异常检测、股东减持
+9. **投资结论**：综合评分、操作建议（实时优先）
 
 报告标题规范：
 - `summary_title` 使用格式：`股票名称(股票代码)：总结性结论`
@@ -533,10 +549,11 @@ python scripts/valuation_calculator.py \
 
 ## Best Practices
 
-1. **数据时效性**：财务数据以最新季报/年报为准，价格数据为当日收盘价
+1. **数据时效性**：财务数据以最新季报/年报为准，价格数据为当日收盘价；开启 `--with-realtime` / `--with-event-window` 时补充趋势与事件冲击的动态指标
 2. **投资建议**：所有分析仅供参考，不构成投资建议
 3. **风险提示**：始终包含风险提示，特别是财务异常检测结果
 4. **对比分析**：单只股票分析时，自动包含行业均值对比
+5. **评分权重**：实时数据存在时使用 `财务40% + 实时60%`；实时缺失时退化为财务分
 
 ## Important Notes
 

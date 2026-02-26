@@ -19,7 +19,11 @@ def test_generate_summary_has_score_and_sections():
 
     assert 0 <= result["score"] <= 100
     assert result["realtime_score"] is not None
-    assert result["score_weights"]["realtime"] == 0.4
+    assert result["event_window_score"] is not None
+    assert result["score_weights"]["realtime"] == 0.6
+    assert result["score_weights"]["fundamental"] == 0.4
+    assert "realtime_metrics" in result
+    assert "event_window" in result
     assert "profitability" in result
     assert "anomalies" in result
     assert "performance" in result
@@ -33,4 +37,5 @@ def test_generate_summary_fallback_to_fundamental_when_no_realtime():
     result = analyzer.generate_summary(level="standard")
 
     assert result["realtime_score"] is None
+    assert result["event_window_score"] is not None
     assert result["score_weights"]["realtime"] == 0.0

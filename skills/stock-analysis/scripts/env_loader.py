@@ -44,3 +44,7 @@ def get_env(name: str, default: str = "") -> str:
 
 def get_tushare_token() -> str:
     return get_env("TUSHARE_TOKEN") or get_env("TS_TOKEN")
+
+
+def get_brave_api_key() -> str:
+    return get_env("BRAVE_API_KEY")

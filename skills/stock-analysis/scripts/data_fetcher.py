@@ -14,11 +14,12 @@ import sys
 import time
 from datetime import datetime, timedelta
 from functools import wraps
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Sequence, Tuple
 from news_fetcher import fetch_news
 from sentiment_analyzer import analyze_news_sentiment
-from env_loader import get_tushare_token
+from env_loader import get_tushare_token, get_brave_api_key
 from realtime_metrics import calculate_realtime_metrics
+from event_window import collect_event_candidates, calculate_event_window
 
 try:
     import pandas as pd
@@ -118,6 +119,26 @@ def safe_float(value) -> Optional[float]:
         return float(value)
     except (ValueError, TypeError):
         return None
+
+
+def parse_event_window_post_days(raw: str) -> Tuple[int, ...]:
+    """解析事件窗口后验天数参数，如: 1,3,5"""
+    if not raw:
+        return (1, 3, 5)
+    values = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            day = int(part)
+            if day >= 1:
+                values.append(day)
+        except Exception:
+            continue
+    if not values:
+        return (1, 3, 5)
+    return tuple(sorted(set(values)))
 
 
 def get_cache_path(code: str, data_type: str) -> str:
@@ -812,13 +833,21 @@ def fetch_stock_data(
     years: int = 3,
     use_cache: bool = True,
     with_realtime: bool = False,
+    with_event_window: bool = False,
     benchmark: str = "hs300",
     realtime_window: int = 60,
+    event_window_pre: int = 1,
+    event_window_post: Sequence[int] = (1, 3, 5),
     cache_ttl_min: int = 1440,
 ) -> dict:
     """获取单只股票的数据"""
     code = normalize_symbol(code)
-    cache_key = data_type if not with_realtime else f"{data_type}_rt_{benchmark}_{max(20, realtime_window)}"
+    cache_key = data_type
+    if with_realtime:
+        cache_key += f"_rt_{benchmark}_{max(20, realtime_window)}"
+    if with_event_window:
+        post_key = "-".join(str(int(x)) for x in sorted(set(event_window_post)) if int(x) >= 1) or "1-3-5"
+        cache_key += f"_ew_{benchmark}_p{max(0, int(event_window_pre))}_w{post_key}"
 
     if use_cache:
         cached = load_cache(code, cache_key, ttl_minutes=cache_ttl_min)
@@ -877,6 +906,15 @@ def fetch_stock_data(
         if isinstance(benchmark_price, dict) and benchmark_price.get("error"):
             result["realtime_metrics"]["benchmark_error"] = benchmark_price.get("error")
 
+    if with_event_window:
+        log(f"  - 计算事件窗口（benchmark={benchmark}）...")
+        result = attach_event_window(
+            result,
+            benchmark=benchmark,
+            pre_days=event_window_pre,
+            post_days=event_window_post,
+        )
+
     if data_type in ["all", "holder"]:
         log("  - 获取股东数据...")
         result["holder"] = get_holder_data(code)
@@ -894,8 +932,11 @@ def fetch_multiple_stocks(
     codes: list,
     data_type: str = "basic",
     with_realtime: bool = False,
+    with_event_window: bool = False,
     benchmark: str = "hs300",
     realtime_window: int = 60,
+    event_window_pre: int = 1,
+    event_window_post: Sequence[int] = (1, 3, 5),
     cache_ttl_min: int = 1440,
 ) -> dict:
     """获取多只股票数据"""
@@ -916,8 +957,11 @@ def fetch_multiple_stocks(
                 data_type,
                 use_cache=True,
                 with_realtime=with_realtime,
+                with_event_window=with_event_window,
                 benchmark=benchmark,
                 realtime_window=realtime_window,
+                event_window_pre=event_window_pre,
+                event_window_post=event_window_post,
                 cache_ttl_min=cache_ttl_min,
             )
             if "error" not in stock_data.get("basic_info", {}):
@@ -935,14 +979,28 @@ def fetch_multiple_stocks(
     return result
 
 
-def attach_news_data(result: dict, days: int = 7, limit: int = 20, news_sources: str = "") -> dict:
+def attach_news_data(
+    result: dict,
+    days: int = 7,
+    limit: int = 20,
+    news_sources: str = "",
+    news_provider: str = "auto",
+    brave_api_key: str = "",
+) -> dict:
     """为结果补充新闻与舆情数据。"""
     code = result.get("code", "")
     basic = result.get("basic_info", {})
     name = basic.get("name", "")
 
     try:
-        items = fetch_news(code=code, name=name, days=days, limit=limit)
+        items = fetch_news(
+            code=code,
+            name=name,
+            days=days,
+            limit=limit,
+            provider=news_provider,
+            brave_api_key=brave_api_key,
+        )
         if news_sources:
             allow_sources = {x.strip().lower() for x in news_sources.split(",") if x.strip()}
             if allow_sources:
@@ -972,13 +1030,49 @@ def attach_news_data(result: dict, days: int = 7, limit: int = 20, news_sources:
     return result
 
 
+def attach_event_window(
+    result: dict,
+    benchmark: str = "hs300",
+    pre_days: int = 1,
+    post_days: Sequence[int] = (1, 3, 5),
+    max_events: int = 40,
+) -> dict:
+    """为结果补充事件窗口分析。"""
+    if not isinstance(result, dict):
+        return result
+
+    code = result.get("code", "")
+    if "price" not in result or not result.get("price"):
+        if code:
+            log("  - 获取价格数据（事件窗口依赖）...")
+            result["price"] = get_price_data(code, days=max(90, max(post_days, default=5) * 12))
+
+    benchmark_price = get_index_price_data(benchmark, days=max(90, max(post_days, default=5) * 12))
+    candidates = collect_event_candidates(result, max_events=max_events * 2)
+    ew = calculate_event_window(
+        price=result.get("price", {}),
+        events=candidates,
+        benchmark_price=benchmark_price,
+        pre_days=pre_days,
+        post_days=post_days,
+        max_events=max_events,
+    )
+    ew["benchmark"] = benchmark
+    ew["event_sources"] = ["news_items", "performance_data.forecast", "performance_data.express", "performance_data.audit"]
+    if isinstance(benchmark_price, dict) and benchmark_price.get("error"):
+        ew["benchmark_error"] = benchmark_price.get("error")
+    result["event_window"] = ew
+    return result
+
+
 def summarize_table(result: dict) -> str:
     basic = result.get("basic_info", {})
     price = result.get("price", {})
     valuation = result.get("valuation", {})
     sentiment = result.get("news_sentiment", {})
     realtime = result.get("realtime_metrics", {})
-    headers = ["代码", "名称", "行业", "最新价", "PE_TTM", "PB", "实时分", "舆情", "数据类型"]
+    event_window = result.get("event_window", {})
+    headers = ["代码", "名称", "行业", "最新价", "PE_TTM", "PB", "实时分", "事件窗分", "舆情", "数据类型"]
     rows = [[
         result.get("code", ""),
         basic.get("name", ""),
@@ -987,6 +1081,7 @@ def summarize_table(result: dict) -> str:
         basic.get("pe_ttm", valuation.get("latest", {}).get("pe_ttm", "")),
         basic.get("pb", valuation.get("latest", {}).get("pb", "")),
         realtime.get("realtime_score", "-"),
+        event_window.get("event_window_score", "-"),
         sentiment.get("risk_level", "-"),
         result.get("data_type", ""),
     ]]
@@ -997,6 +1092,8 @@ def main():
     default_years = int(os.getenv("STOCK_ANALYSIS_DEFAULT_YEARS", "3"))
     default_news_days = int(os.getenv("STOCK_ANALYSIS_DEFAULT_NEWS_DAYS", "7"))
     default_news_limit = int(os.getenv("STOCK_ANALYSIS_DEFAULT_NEWS_LIMIT", "20"))
+    default_news_provider = os.getenv("STOCK_ANALYSIS_NEWS_PROVIDER", "auto")
+    default_brave_api_key = get_brave_api_key()
     default_cache_ttl = int(os.getenv("STOCK_ANALYSIS_CACHE_TTL_MIN", "1440"))
     parser = argparse.ArgumentParser(description="A股数据获取工具")
     parser.add_argument("--code", type=str, help="股票代码 (如: 600519)")
@@ -1016,9 +1113,14 @@ def main():
     parser.add_argument("--news-days", type=int, default=default_news_days, help=f"新闻窗口天数 (默认: {default_news_days})")
     parser.add_argument("--news-limit", type=int, default=default_news_limit, help=f"新闻最大条数 (默认: {default_news_limit})")
     parser.add_argument("--news-sources", type=str, default="", help="新闻来源过滤，逗号分隔")
+    parser.add_argument("--news-provider", choices=["auto", "brave", "tushare", "rss"], default=default_news_provider, help=f"新闻源 (默认: {default_news_provider})")
+    parser.add_argument("--brave-api-key", type=str, default=default_brave_api_key, help="Brave Search API Key（默认从 ~/.aj-skills/.env 的 BRAVE_API_KEY 读取）")
     parser.add_argument("--with-realtime", action="store_true", help="附加实时指标（趋势/确认/风险/筹码）")
+    parser.add_argument("--with-event-window", action="store_true", help="附加事件窗口分析（事件后1/3/5日反应）")
     parser.add_argument("--benchmark", type=str, default="hs300", choices=["hs300", "zz500", "zz1000", "cyb", "kcb"], help="相对强弱基准指数")
     parser.add_argument("--realtime-window", type=int, default=60, help="实时指标窗口（日）")
+    parser.add_argument("--event-window-pre", type=int, default=1, help="事件窗口前置天数（默认: 1）")
+    parser.add_argument("--event-window-post", type=str, default="1,3,5", help="事件窗口后验天数，逗号分隔（默认: 1,3,5）")
     parser.add_argument("--cache-ttl-min", type=int, default=default_cache_ttl, help=f"缓存TTL分钟数 (默认: {default_cache_ttl})")
     parser.add_argument("--format", choices=["json", "table"], default="json", help="输出格式")
     parser.add_argument("--quiet", action="store_true", help="静默模式，仅输出结果")
@@ -1028,6 +1130,7 @@ def main():
     global CLI_TOKEN, VERBOSE
     CLI_TOKEN = args.token
     VERBOSE = not args.quiet
+    event_window_post = parse_event_window_post_days(args.event_window_post)
 
     result = {}
 
@@ -1038,8 +1141,11 @@ def main():
             args.years,
             use_cache=not args.no_cache,
             with_realtime=args.with_realtime,
+            with_event_window=args.with_event_window,
             benchmark=args.benchmark,
             realtime_window=args.realtime_window,
+            event_window_pre=args.event_window_pre,
+            event_window_post=event_window_post,
             cache_ttl_min=args.cache_ttl_min,
         )
         if args.data_type in ["all", "news"] or args.with_news:
@@ -1049,15 +1155,28 @@ def main():
                 days=args.news_days,
                 limit=args.news_limit,
                 news_sources=args.news_sources,
+                news_provider=args.news_provider,
+                brave_api_key=args.brave_api_key,
             )
+            if args.with_event_window:
+                log("  - 事件窗口重算（纳入新闻事件）...")
+                result = attach_event_window(
+                    result,
+                    benchmark=args.benchmark,
+                    pre_days=args.event_window_pre,
+                    post_days=event_window_post,
+                )
     elif args.codes:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]
         result = fetch_multiple_stocks(
             codes,
             args.data_type,
             with_realtime=args.with_realtime,
+            with_event_window=args.with_event_window,
             benchmark=args.benchmark,
             realtime_window=args.realtime_window,
+            event_window_pre=args.event_window_pre,
+            event_window_post=event_window_post,
             cache_ttl_min=args.cache_ttl_min,
         )
         if args.with_news:
@@ -1067,7 +1186,16 @@ def main():
                     days=args.news_days,
                     limit=args.news_limit,
                     news_sources=args.news_sources,
+                    news_provider=args.news_provider,
+                    brave_api_key=args.brave_api_key,
                 )
+                if args.with_event_window:
+                    attach_event_window(
+                        item,
+                        benchmark=args.benchmark,
+                        pre_days=args.event_window_pre,
+                        post_days=event_window_post,
+                    )
     elif args.scope:
         if args.scope == "all":
             codes = get_all_a_stocks()

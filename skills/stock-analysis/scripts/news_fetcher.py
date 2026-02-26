@@ -18,7 +18,6 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import List, Optional
-from env_loader import get_tushare_token, get_brave_api_key
 
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search"
@@ -308,8 +307,7 @@ def _fetch_brave_news(
     return out
 
 
-def _fetch_tushare_news(code: str, name: str, days: int, limit: int) -> List[dict]:
-    token = get_tushare_token()
+def _fetch_tushare_news(code: str, name: str, days: int, limit: int, token: str) -> List[dict]:
     if not token:
         return []
 
@@ -379,6 +377,7 @@ def fetch_news(
     language: str = "zh-CN",
     provider: str = "auto",
     brave_api_key: str = "",
+    tushare_token: str = "",
 ) -> List[dict]:
     """抓取新闻列表。"""
     query = _build_query(code=code, name=name)
@@ -402,7 +401,8 @@ def fetch_news(
     ]
 
     provider = (provider or "auto").strip().lower()
-    brave_key = brave_api_key or get_brave_api_key()
+    brave_key = brave_api_key
+    ts_token = tushare_token
     provider_errors = []
 
     strategy = []
@@ -413,13 +413,13 @@ def fetch_news(
     elif provider == "rss":
         strategy = ["rss"]
     else:
-        # auto: 若存在 BRAVE_API_KEY 优先 Brave，否则沿用 tushare + RSS
+        # auto: 若传入 brave key 优先 Brave，否则沿用 tushare + RSS
         strategy = ["brave", "tushare", "rss"] if brave_key else ["tushare", "rss"]
 
     for source in strategy:
         if source == "brave":
             if not brave_key:
-                provider_errors.append("brave: 缺少 BRAVE_API_KEY")
+                provider_errors.append("brave: 缺少 --brave-api-key")
                 continue
             try:
                 items = _fetch_brave_news(
@@ -437,8 +437,17 @@ def fetch_news(
             continue
 
         if source == "tushare":
+            if not ts_token:
+                provider_errors.append("tushare: 缺少 tushare token（请通过 --token 传入）")
+                continue
             try:
-                ts_items = _fetch_tushare_news(code=code, name=name, days=days, limit=limit)
+                ts_items = _fetch_tushare_news(
+                    code=code,
+                    name=name,
+                    days=days,
+                    limit=limit,
+                    token=ts_token,
+                )
                 if ts_items:
                     return ts_items
             except Exception as exc:
@@ -468,9 +477,15 @@ def main():
     parser.add_argument("--days", type=int, default=7, help="最近多少天")
     parser.add_argument("--limit", type=int, default=20, help="最多返回条数")
     parser.add_argument("--provider", choices=["auto", "brave", "tushare", "rss"], default="auto", help="新闻源")
-    parser.add_argument("--brave-api-key", default="", help="Brave Search API Key（可不传，默认从 ~/.aj-skills/.env 读取 BRAVE_API_KEY）")
+    parser.add_argument("--token", default="", help="tushare token（provider=tushare 时必填）")
+    parser.add_argument("--brave-api-key", default="", help="Brave Search API Key（provider=brave 时必填）")
     parser.add_argument("--output", help="输出文件路径")
     args = parser.parse_args()
+
+    if args.provider == "tushare" and not str(args.token or "").strip():
+        parser.error("provider=tushare 时，--token 不能为空")
+    if args.provider == "brave" and not str(args.brave_api_key or "").strip():
+        parser.error("provider=brave 时，--brave-api-key 不能为空")
 
     result = {
         "code": args.code,
@@ -490,6 +505,7 @@ def main():
             limit=args.limit,
             provider=args.provider,
             brave_api_key=args.brave_api_key,
+            tushare_token=args.token,
         )
     except Exception as exc:
         result["error"] = str(exc)

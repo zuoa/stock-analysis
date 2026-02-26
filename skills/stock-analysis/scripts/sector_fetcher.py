@@ -17,8 +17,6 @@ except ImportError:
     print("pip install tushare pandas")
     sys.exit(1)
 
-from env_loader import get_tushare_token
-
 
 DEFAULT_SECTORS = {
     "AI芯片": {
@@ -76,9 +74,9 @@ def load_sector_config(path: str) -> Dict[str, Dict[str, str]]:
 
 
 def init_pro(token: str = ""):
-    t = token or get_tushare_token()
+    t = token
     if not t:
-        raise RuntimeError("未检测到 TUSHARE_TOKEN，请设置环境变量或 ~/.aj-skills/.env")
+        raise RuntimeError("缺少 tushare token，请通过 --token 传入")
     ts.set_token(t)
     return ts.pro_api()
 
@@ -155,7 +153,7 @@ def main():
     parser = argparse.ArgumentParser(description="板块数据获取")
     parser.add_argument("--sector-name", default="算力板块", help="板块名称")
     parser.add_argument("--sector-file", help="板块配置JSON路径（格式: {细分领域: {代码: 名称}}）")
-    parser.add_argument("--token", help="tushare token")
+    parser.add_argument("--token", required=True, help="tushare token（必填）")
     parser.add_argument("--sleep", type=float, default=0.1, help="每只股票请求间隔秒")
     parser.add_argument("--format", choices=["json", "table"], default="json", help="控制台输出格式")
     parser.add_argument("--output", required=True, help="输出JSON路径")

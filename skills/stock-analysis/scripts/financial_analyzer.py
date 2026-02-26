@@ -24,6 +24,7 @@ except ImportError:
     sys.exit(1)
 
 from data_contract import ensure_stock_data
+from assemble_data import assemble_from_dir
 
 
 class FinancialAnalyzer:
@@ -1119,7 +1120,8 @@ def main():
         return "\n".join(lines)
 
     parser = argparse.ArgumentParser(description="A股财务分析器")
-    parser.add_argument("--input", type=str, required=True, help="输入数据文件 (JSON)")
+    parser.add_argument("--input", type=str, help="输入数据文件 (JSON)")
+    parser.add_argument("--input-dir", type=str, help="分模块数据目录（默认读取 basic/financial/valuation/price/news/realtime/event_window.json）")
     parser.add_argument("--level", type=str, default="standard",
                        choices=["summary", "standard", "deep"],
                        help="分析深度级别")
@@ -1133,9 +1135,15 @@ def main():
 
     args = parser.parse_args()
 
+    if not args.input and not args.input_dir:
+        parser.error("必须提供 --input 或 --input-dir")
+
     # 加载数据
-    with open(args.input, 'r', encoding='utf-8') as f:
-        data = json.load(f)
+    if args.input:
+        with open(args.input, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    else:
+        data = assemble_from_dir(args.input_dir)
 
     analyzer = FinancialAnalyzer()
 

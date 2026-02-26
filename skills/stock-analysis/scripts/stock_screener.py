@@ -4,7 +4,6 @@ A股股票筛选器
 根据多种财务指标筛选符合条件的股票
 
 依赖: pip install tushare pandas numpy
-环境变量: TUSHARE_TOKEN=你的token
 """
 
 import argparse
@@ -14,7 +13,6 @@ import time
 from datetime import datetime, timedelta
 from functools import wraps
 from typing import Dict, List
-from env_loader import get_tushare_token
 
 try:
     import numpy as np
@@ -90,10 +88,8 @@ class StockScreener:
 
     def __init__(self, token: str = None, quiet: bool = False):
         self.quiet = quiet
-        token = token or get_tushare_token()
         if not token:
-            print("错误: 未检测到 TUSHARE_TOKEN 环境变量")
-            print("请设置环境变量，或在 ~/.aj-skills/.env 中配置 TUSHARE_TOKEN")
+            print("错误: 缺少 tushare token，请通过 --token 传入")
             sys.exit(1)
 
         ts.set_token(token)
@@ -397,7 +393,7 @@ def main():
     parser.add_argument("--market-cap-max", type=float, help="最大市值 (亿)")
     parser.add_argument("--sort-by", type=str, default="score", choices=["score", "pe", "pb", "market_cap"], help="排序方式")
     parser.add_argument("--top", type=int, default=50, help="返回前N只股票")
-    parser.add_argument("--token", type=str, help="tushare token，优先于环境变量")
+    parser.add_argument("--token", type=str, required=True, help="tushare token（必填）")
     parser.add_argument("--format", choices=["json", "table"], default="json", help="输出格式")
     parser.add_argument("--quiet", action="store_true", help="静默模式")
     parser.add_argument("--output", type=str, help="输出文件路径 (JSON)")

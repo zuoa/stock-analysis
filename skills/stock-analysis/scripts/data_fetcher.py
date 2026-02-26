@@ -4,7 +4,6 @@ A股数据获取模块
 使用tushare获取股票财务数据、行情数据、股东信息等
 
 依赖: pip install tushare pandas
-环境变量: TUSHARE_TOKEN=你的token
 """
 
 import argparse
@@ -17,7 +16,6 @@ from functools import wraps
 from typing import Callable, Dict, Optional, Sequence, Tuple
 from news_fetcher import fetch_news
 from sentiment_analyzer import analyze_news_sentiment
-from env_loader import get_tushare_token, get_brave_api_key
 from realtime_metrics import calculate_realtime_metrics
 from event_window import collect_event_candidates, calculate_event_window
 
@@ -60,13 +58,10 @@ def retry_on_failure(max_retries: int = 3, delay: float = 1.0):
     return decorator
 
 
-def get_tushare_pro():
+def get_tushare_pro(token: str):
     """初始化tushare pro客户端"""
-    token = get_tushare_token()
     if not token:
-        print("错误: 未检测到 TUSHARE_TOKEN 环境变量")
-        print("请设置环境变量，或在 ~/.aj-skills/.env 中配置 TUSHARE_TOKEN")
-        sys.exit(1)
+        raise RuntimeError("缺少 tushare token，请通过 --token 传入")
 
     ts.set_token(token)
     return ts.pro_api()
@@ -78,14 +73,10 @@ VERBOSE = True
 
 
 def pro():
-    """延迟初始化，避免 --help 场景也强依赖 token。"""
+    """延迟初始化tushare客户端。"""
     global PRO
     if PRO is None:
-        if CLI_TOKEN:
-            ts.set_token(CLI_TOKEN)
-            PRO = ts.pro_api()
-            return PRO
-        PRO = get_tushare_pro()
+        PRO = get_tushare_pro(CLI_TOKEN)
     return PRO
 
 
@@ -986,6 +977,7 @@ def attach_news_data(
     news_sources: str = "",
     news_provider: str = "auto",
     brave_api_key: str = "",
+    tushare_token: str = "",
 ) -> dict:
     """为结果补充新闻与舆情数据。"""
     code = result.get("code", "")
@@ -1000,6 +992,7 @@ def attach_news_data(
             limit=limit,
             provider=news_provider,
             brave_api_key=brave_api_key,
+            tushare_token=tushare_token,
         )
         if news_sources:
             allow_sources = {x.strip().lower() for x in news_sources.split(",") if x.strip()}
@@ -1093,7 +1086,6 @@ def main():
     default_news_days = int(os.getenv("STOCK_ANALYSIS_DEFAULT_NEWS_DAYS", "7"))
     default_news_limit = int(os.getenv("STOCK_ANALYSIS_DEFAULT_NEWS_LIMIT", "20"))
     default_news_provider = os.getenv("STOCK_ANALYSIS_NEWS_PROVIDER", "auto")
-    default_brave_api_key = get_brave_api_key()
     default_cache_ttl = int(os.getenv("STOCK_ANALYSIS_CACHE_TTL_MIN", "1440"))
     parser = argparse.ArgumentParser(description="A股数据获取工具")
     parser.add_argument("--code", type=str, help="股票代码 (如: 600519)")
@@ -1108,13 +1100,13 @@ def main():
     parser.add_argument("--years", type=int, default=default_years, help=f"获取多少年的历史数据 (默认: {default_years})")
     parser.add_argument("--scope", type=str, help="筛选范围: hs300/zz500/cyb/kcb/all")
     parser.add_argument("--no-cache", action="store_true", help="不使用缓存")
-    parser.add_argument("--token", type=str, help="tushare token，优先于环境变量")
+    parser.add_argument("--token", type=str, required=True, help="tushare token（必填）")
     parser.add_argument("--with-news", action="store_true", help="附加最近新闻与舆情")
     parser.add_argument("--news-days", type=int, default=default_news_days, help=f"新闻窗口天数 (默认: {default_news_days})")
     parser.add_argument("--news-limit", type=int, default=default_news_limit, help=f"新闻最大条数 (默认: {default_news_limit})")
     parser.add_argument("--news-sources", type=str, default="", help="新闻来源过滤，逗号分隔")
     parser.add_argument("--news-provider", choices=["auto", "brave", "tushare", "rss"], default=default_news_provider, help=f"新闻源 (默认: {default_news_provider})")
-    parser.add_argument("--brave-api-key", type=str, default=default_brave_api_key, help="Brave Search API Key（默认从 ~/.aj-skills/.env 的 BRAVE_API_KEY 读取）")
+    parser.add_argument("--brave-api-key", type=str, default="", help="Brave Search API Key（news-provider=brave 时必填）")
     parser.add_argument("--with-realtime", action="store_true", help="附加实时指标（趋势/确认/风险/筹码）")
     parser.add_argument("--with-event-window", action="store_true", help="附加事件窗口分析（事件后1/3/5日反应）")
     parser.add_argument("--benchmark", type=str, default="hs300", choices=["hs300", "zz500", "zz1000", "cyb", "kcb"], help="相对强弱基准指数")
@@ -1127,6 +1119,8 @@ def main():
     parser.add_argument("--output", type=str, help="输出文件路径 (JSON)")
 
     args = parser.parse_args()
+    if not str(args.token or "").strip():
+        parser.error("--token 不能为空（请确认 TUSHARE_TOKEN 已正确导出，或直接传入明文）")
     global CLI_TOKEN, VERBOSE
     CLI_TOKEN = args.token
     VERBOSE = not args.quiet
@@ -1157,6 +1151,7 @@ def main():
                 news_sources=args.news_sources,
                 news_provider=args.news_provider,
                 brave_api_key=args.brave_api_key,
+                tushare_token=args.token,
             )
             if args.with_event_window:
                 log("  - 事件窗口重算（纳入新闻事件）...")
@@ -1188,6 +1183,7 @@ def main():
                     news_sources=args.news_sources,
                     news_provider=args.news_provider,
                     brave_api_key=args.brave_api_key,
+                    tushare_token=args.token,
                 )
                 if args.with_event_window:
                     attach_event_window(

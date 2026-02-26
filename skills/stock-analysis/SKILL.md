@@ -49,10 +49,22 @@ python3 -m pip install tushare pandas numpy
 - `.venv` 必须位于 skill 项目根目录下（不是全局目录）
 - 若 `import tushare` 失败，必须先执行上述 bootstrap，再继续后续分析流程
 
-Tushare token 约定从 `~/.aj-skills/.env` 读取：
+`TUSHARE_TOKEN` / `BRAVE_API_KEY` 建议保存在 `~/.aj-skills/.env`，并在执行前先加载到当前 shell：
 ```bash
-# ~/.aj-skills/.env
-TUSHARE_TOKEN=your_token
+set -a
+source ~/.aj-skills/.env
+set +a
+```
+
+说明：
+- 脚本不会自动读取 `~/.aj-skills/.env`
+- 必须通过 CLI 参数显式传入：`--token "${TUSHARE_TOKEN}"`、`--brave-api-key "${BRAVE_API_KEY}"`
+
+执行前参数预检（使用 `test` 命令）：
+```bash
+test -n "${TUSHARE_TOKEN}" || { echo "缺少 TUSHARE_TOKEN"; exit 1; }
+# 仅当使用 Brave 新闻源时检查
+test -n "${BRAVE_API_KEY}" || { echo "缺少 BRAVE_API_KEY（news-provider=brave 时必填）"; exit 1; }
 ```
 
 ### 依赖检查
@@ -125,6 +137,7 @@ python3 -c "import tushare; print(tushare.__version__)"
 ```bash
 python scripts/stock_screener.py \
     --scope "hs300" \
+    --token "${TUSHARE_TOKEN}" \
     --pe-max 15 \
     --roe-min 15 \
     --debt-ratio-max 60 \
@@ -140,7 +153,7 @@ python scripts/stock_screener.py \
 - `--growth-min`: 最低增长率
 - `--debt-ratio-max`: 最大资产负债率
 - `--dividend-min`: 最低股息率
-- `--token`: tushare token（优先于环境变量）
+- `--token`: tushare token（必填）
 - `--format`: 输出格式 (json/table)
 - `--quiet`: 静默模式
 - `--output`: 输出文件路径
@@ -181,9 +194,75 @@ mkdir -p "${stock_dir}"
 
 ### Step 2: Fetch Stock Data
 
+推荐使用“分模块抓取 + 聚合”流程（CLI解耦）：
+
+```bash
+mkdir -p "${stock_dir}/data"
+
+# 1) 基础信息
+python scripts/fetch_basic.py \
+  --code "600519" \
+  --token "${TUSHARE_TOKEN}" \
+  --output "${stock_dir}/data/basic.json"
+
+# 2) 财务数据
+python scripts/fetch_financial.py \
+  --code "600519" \
+  --token "${TUSHARE_TOKEN}" \
+  --years 5 \
+  --output "${stock_dir}/data/financial.json"
+
+# 3) 估值与行情
+python scripts/fetch_valuation.py \
+  --code "600519" \
+  --token "${TUSHARE_TOKEN}" \
+  --output "${stock_dir}/data/valuation.json"
+python scripts/fetch_price.py \
+  --code "600519" \
+  --token "${TUSHARE_TOKEN}" \
+  --days 180 \
+  --output "${stock_dir}/data/price.json"
+
+# 4) 新闻舆情
+python scripts/fetch_news_data.py \
+  --code "600519" \
+  --name "贵州茅台" \
+  --days 7 \
+  --limit 20 \
+  --provider brave \
+  --brave-api-key "${BRAVE_API_KEY}" \
+  --output "${stock_dir}/data/news.json"
+
+# 5) 实时与事件窗口
+python scripts/fetch_realtime.py \
+  --code "600519" \
+  --token "${TUSHARE_TOKEN}" \
+  --benchmark hs300 \
+  --window 60 \
+  --output "${stock_dir}/data/realtime.json"
+python scripts/fetch_event_window.py \
+  --code "600519" \
+  --token "${TUSHARE_TOKEN}" \
+  --name "贵州茅台" \
+  --benchmark hs300 \
+  --pre-days 1 \
+  --post-days 1,3,5 \
+  --provider brave \
+  --brave-api-key "${BRAVE_API_KEY}" \
+  --output "${stock_dir}/data/event_window.json"
+
+# 6) 聚合为分析输入
+python scripts/assemble_data.py \
+  --input-dir "${stock_dir}/data" \
+  --output "${stock_dir}/stock_data.json"
+```
+
+兼容模式（单命令抓取）保留如下：
+
 ```bash
 python scripts/data_fetcher.py \
     --code "600519" \
+    --token "${TUSHARE_TOKEN}" \
     --data-type all \
     --with-news \
     --news-provider brave \
@@ -204,15 +283,13 @@ python scripts/data_fetcher.py \
 - `--code`: 股票代码
 - `--data-type`: 数据类型 (basic/financial/valuation/holder/news/all)
 - `--years`: 获取多少年的历史数据
-- `--token`: tushare token（优先于环境变量）
-- 默认读取：`~/.aj-skills/.env` 中的 `TUSHARE_TOKEN`
-- Brave 新闻搜索默认读取：`~/.aj-skills/.env` 中的 `BRAVE_API_KEY`
+- `--token`: tushare token（必填）
 - `--with-news`: 附加新闻与舆情
 - `--news-days`: 新闻窗口天数
 - `--news-limit`: 新闻最大条数
 - `--news-sources`: 新闻来源过滤（逗号分隔）
 - `--news-provider`: 新闻源 (auto/brave/tushare/rss)
-- `--brave-api-key`: Brave Search API Key（默认从 `~/.aj-skills/.env` 读取 `BRAVE_API_KEY`，也可显式传入）
+- `--brave-api-key`: Brave Search API Key（`news-provider=brave` 时必填）
 - `--with-realtime`: 附加实时指标（趋势/确认/风险/筹码）
 - `--with-event-window`: 附加事件窗口分析（事件后1/3/5日反应）
 - `--benchmark`: 相对强弱基准指数 (hs300/zz500/zz1000/cyb/kcb)
@@ -227,7 +304,7 @@ python scripts/data_fetcher.py \
 ### 可选：单独执行新闻舆情流程
 
 ```bash
-python scripts/news_fetcher.py --code 600519 --name 贵州茅台 --days 7 --limit 20 --provider brave --brave-api-key "${BRAVE_API_KEY}" --output "${stock_dir}/news.json"
+python scripts/news_fetcher.py --code 600519 --name 贵州茅台 --token "${TUSHARE_TOKEN}" --days 7 --limit 20 --provider brave --brave-api-key "${BRAVE_API_KEY}" --output "${stock_dir}/news.json"
 python scripts/sentiment_analyzer.py --input "${stock_dir}/news.json" --output "${stock_dir}/sentiment.json"
 ```
 
@@ -240,8 +317,18 @@ python scripts/financial_analyzer.py \
     --output "${stock_dir}/analysis_result.json"
 ```
 
+或直接读取分模块目录（自动聚合）：
+
+```bash
+python scripts/financial_analyzer.py \
+    --input-dir "${stock_dir}/data" \
+    --level standard \
+    --output "${stock_dir}/analysis_result.json"
+```
+
 **参数说明：**
 - `--input`: 输入的股票数据文件
+- `--input-dir`: 分模块目录（自动读取并聚合为分析输入）
 - `--level`: 分析深度 (summary/standard/deep)
 - `--output`: 输出文件
 
@@ -322,6 +409,7 @@ ${stock_dir}/final_report_humanized.md
 # 1) 获取板块数据
 python scripts/sector_fetcher.py \
   --sector-name "算力板块" \
+  --token "${TUSHARE_TOKEN}" \
   --sector-file config/sector_computing_default.json \
   --output "${stock_dir}/sector_data.json"
 
@@ -342,6 +430,7 @@ python scripts/sector_analyze.py \
 ```bash
 python scripts/data_fetcher.py \
     --codes "600519,000858,002304" \
+    --token "${TUSHARE_TOKEN}" \
     --data-type comparison \
     --output industry_data.json
 ```
@@ -350,6 +439,7 @@ python scripts/data_fetcher.py \
 ```bash
 python scripts/data_fetcher.py \
     --industry "白酒" \
+    --token "${TUSHARE_TOKEN}" \
     --top 10 \
     --output industry_data.json
 ```

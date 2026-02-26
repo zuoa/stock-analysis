@@ -19,6 +19,9 @@ OPTIONAL_SECTIONS = [
     "financial_indicators",
     "valuation",
     "price",
+    "flow_metrics",
+    "chip_events",
+    "realtime_metrics",
     "holder",
     "dividend",
     "news_items",
@@ -49,7 +52,19 @@ def validate_stock_data(data: Dict, required_sections: Optional[List[str]] = Non
                 if key in financial_data and not isinstance(financial_data.get(key), list):
                     errors.append(f"字段 financial_data.{key} 必须是 array")
 
-    for key in ["financial_indicators", "news_items", "holder", "dividend", "valuation", "price", "news_sentiment", "performance_data"]:
+    for key in [
+        "financial_indicators",
+        "news_items",
+        "holder",
+        "dividend",
+        "valuation",
+        "price",
+        "news_sentiment",
+        "performance_data",
+        "flow_metrics",
+        "chip_events",
+        "realtime_metrics",
+    ]:
         if key in data and data[key] is not None:
             expected_type = list if key in ["financial_indicators", "news_items"] else dict
             if not isinstance(data[key], expected_type):

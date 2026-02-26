@@ -186,6 +186,9 @@ python scripts/data_fetcher.py \
     --code "600519" \
     --data-type all \
     --with-news \
+    --with-realtime \
+    --benchmark hs300 \
+    --realtime-window 60 \
     --news-days 7 \
     --news-limit 20 \
     --years 5 \
@@ -202,6 +205,10 @@ python scripts/data_fetcher.py \
 - `--news-days`: 新闻窗口天数
 - `--news-limit`: 新闻最大条数
 - `--news-sources`: 新闻来源过滤（逗号分隔）
+- `--with-realtime`: 附加实时指标（趋势/确认/风险/筹码）
+- `--benchmark`: 相对强弱基准指数 (hs300/zz500/zz1000/cyb/kcb)
+- `--realtime-window`: 实时指标计算窗口（日）
+- `--cache-ttl-min`: 缓存有效期（分钟）
 - `--format`: 输出格式 (json/table)
 - `--quiet`: 静默模式
 - `--output`: 输出文件

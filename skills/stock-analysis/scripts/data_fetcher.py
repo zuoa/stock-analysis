@@ -18,6 +18,7 @@ from typing import Callable, Dict, Optional
 from news_fetcher import fetch_news
 from sentiment_analyzer import analyze_news_sentiment
 from env_loader import get_tushare_token
+from realtime_metrics import calculate_realtime_metrics
 
 try:
     import pandas as pd
@@ -120,22 +121,47 @@ def safe_float(value) -> Optional[float]:
 
 
 def get_cache_path(code: str, data_type: str) -> str:
-    """获取缓存文件路径"""
+    """获取缓存文件路径（可按TTL过期）"""
+    cache_dir = os.path.join(os.path.dirname(__file__), ".cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"{code}_{data_type}.json")
+
+
+def get_legacy_cache_path(code: str, data_type: str) -> str:
+    """兼容旧版按日缓存文件命名"""
     cache_dir = os.path.join(os.path.dirname(__file__), ".cache")
     os.makedirs(cache_dir, exist_ok=True)
     today = datetime.now().strftime("%Y%m%d")
     return os.path.join(cache_dir, f"{code}_{data_type}_{today}.json")
 
 
-def load_cache(code: str, data_type: str) -> Optional[dict]:
-    """加载缓存数据（当天有效）"""
-    cache_path = get_cache_path(code, data_type)
-    if os.path.exists(cache_path):
+def _parse_iso_dt(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def load_cache(code: str, data_type: str, ttl_minutes: int = 1440) -> Optional[dict]:
+    """加载缓存数据（按TTL有效）"""
+    paths = [get_cache_path(code, data_type), get_legacy_cache_path(code, data_type)]
+    for cache_path in paths:
+        if not os.path.exists(cache_path):
+            continue
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if ttl_minutes and ttl_minutes > 0:
+                ts = _parse_iso_dt(data.get("_cache_saved_at", "")) or _parse_iso_dt(data.get("fetch_time", ""))
+                if ts:
+                    age_min = (datetime.now() - ts).total_seconds() / 60
+                    if age_min > ttl_minutes:
+                        continue
+            return data
         except (json.JSONDecodeError, IOError):
-            return None
+            continue
     return None
 
 
@@ -143,8 +169,10 @@ def save_cache(code: str, data_type: str, data: dict):
     """保存缓存数据"""
     cache_path = get_cache_path(code, data_type)
     try:
+        to_save = dict(data)
+        to_save["_cache_saved_at"] = datetime.now().isoformat()
         with open(cache_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, default=str)
+            json.dump(to_save, f, ensure_ascii=False, default=str)
     except IOError:
         pass
 
@@ -509,7 +537,7 @@ def get_price_data(code: str, days: int = 60) -> dict:
 
     try:
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=max(40, days * 3))).strftime("%Y%m%d")
 
         df = pro().daily(
             ts_code=ts_code,
@@ -520,14 +548,95 @@ def get_price_data(code: str, days: int = 60) -> dict:
         if df is None or df.empty:
             return {}
 
-        df = df.sort_values("trade_date").tail(days)
+        df = df.sort_values("trade_date").tail(max(60, days))
         latest = df.iloc[-1]
 
+        db_map = {}
+        try:
+            db = pro().daily_basic(
+                ts_code=ts_code,
+                start_date=start_date,
+                end_date=end_date,
+                fields="ts_code,trade_date,turnover_rate,volume_ratio",
+            )
+            if db is not None and not db.empty:
+                db = db.sort_values("trade_date")
+                db_map = {
+                    str(row.get("trade_date")): {
+                        "turnover_rate": safe_float(row.get("turnover_rate")),
+                        "volume_ratio": safe_float(row.get("volume_ratio")),
+                    }
+                    for _, row in db.iterrows()
+                }
+        except Exception:
+            db_map = {}
+
         price_data = []
-        for _, row in df.tail(30).iterrows():
+        for _, row in df.tail(min(max(days, 60), 180)).iterrows():
+            trade_date = str(row.get("trade_date"))
+            ext = db_map.get(trade_date, {})
             price_data.append(
                 {
-                    "日期": row.get("trade_date"),
+                    "日期": trade_date,
+                    "开盘": row.get("open"),
+                    "最高": row.get("high"),
+                    "最低": row.get("low"),
+                    "收盘": row.get("close"),
+                    "涨跌幅": row.get("pct_chg"),
+                    "成交量": row.get("vol"),
+                    "成交额": row.get("amount"),
+                    "量比": ext.get("volume_ratio"),
+                    "换手率": ext.get("turnover_rate"),
+                }
+            )
+
+        tr_20 = [safe_float(x.get("换手率")) for x in price_data[-20:]]
+        tr_20 = [x for x in tr_20 if x is not None]
+
+        return {
+            "latest_price": safe_float(latest.get("close")),
+            "latest_date": str(latest.get("trade_date")),
+            "price_change_pct": safe_float(latest.get("pct_chg")),
+            "volume": safe_float(latest.get("vol")),
+            "turnover": safe_float(latest.get("amount")),
+            "high_60d": safe_float(df["high"].max()),
+            "low_60d": safe_float(df["low"].min()),
+            "avg_volume_20d": safe_float(df.tail(20)["vol"].mean()),
+            "avg_amount_20d": safe_float(df.tail(20)["amount"].mean()),
+            "avg_turnover_rate_20d": safe_float(sum(tr_20) / len(tr_20)) if tr_20 else None,
+            "price_data": price_data,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@retry_on_failure(max_retries=2, delay=1.0)
+def get_index_price_data(index_name: str, days: int = 60) -> dict:
+    """获取基准指数价格数据（用于相对强弱）"""
+    index_code = INDEX_CODE_MAP.get(index_name)
+    if not index_code:
+        return {"error": f"不支持的benchmark: {index_name}"}
+
+    try:
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=max(40, days * 3))).strftime("%Y%m%d")
+        df = pro().index_daily(
+            ts_code=index_code,
+            start_date=start_date,
+            end_date=end_date,
+            fields="ts_code,trade_date,open,high,low,close,pct_chg,vol,amount",
+        )
+        if df is None or df.empty:
+            return {}
+
+        df = df.sort_values("trade_date").tail(max(60, days))
+        latest = df.iloc[-1]
+
+        rows = []
+        for _, row in df.tail(min(max(days, 60), 180)).iterrows():
+            rows.append(
+                {
+                    "日期": str(row.get("trade_date")),
                     "开盘": row.get("open"),
                     "最高": row.get("high"),
                     "最低": row.get("low"),
@@ -539,18 +648,124 @@ def get_price_data(code: str, days: int = 60) -> dict:
             )
 
         return {
+            "benchmark": index_name,
+            "benchmark_ts_code": index_code,
             "latest_price": safe_float(latest.get("close")),
             "latest_date": str(latest.get("trade_date")),
             "price_change_pct": safe_float(latest.get("pct_chg")),
-            "volume": safe_float(latest.get("vol")),
-            "turnover": safe_float(latest.get("amount")),
-            "high_60d": safe_float(df["high"].max()),
-            "low_60d": safe_float(df["low"].min()),
-            "avg_volume_20d": safe_float(df.tail(20)["vol"].mean()),
-            "price_data": price_data,
+            "price_data": rows,
         }
     except Exception as exc:
         return {"error": str(exc)}
+
+
+def get_flow_metrics(code: str, days: int = 20) -> dict:
+    """获取资金流指标（大单净流入及连续性）。"""
+    ts_code = to_ts_code(code)
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=max(20, days * 3))).strftime("%Y%m%d")
+
+    try:
+        df = pro().moneyflow(ts_code=ts_code, start_date=start_date, end_date=end_date)
+        if df is None or df.empty:
+            return {}
+
+        df = df.sort_values("trade_date").tail(max(5, days))
+        net_values = []
+        for _, row in df.iterrows():
+            buy_lg = safe_float(row.get("buy_lg_amount")) or 0.0
+            buy_elg = safe_float(row.get("buy_elg_amount")) or 0.0
+            sell_lg = safe_float(row.get("sell_lg_amount")) or 0.0
+            sell_elg = safe_float(row.get("sell_elg_amount")) or 0.0
+            net = buy_lg + buy_elg - sell_lg - sell_elg
+            net_values.append(net)
+
+        latest_row = df.iloc[-1]
+        latest_net = net_values[-1] if net_values else 0.0
+        latest_amount = safe_float(latest_row.get("amount"))
+        net_ratio = (latest_net / latest_amount * 100.0) if latest_amount not in [None, 0] else None
+        tail_5 = net_values[-5:] if len(net_values) >= 5 else net_values
+        positive_days_5 = len([x for x in tail_5 if x > 0])
+
+        return {
+            "latest_trade_date": str(latest_row.get("trade_date")),
+            "latest_net_inflow": round(latest_net, 4),
+            "net_inflow_ratio": round(net_ratio, 4) if net_ratio is not None else None,
+            "positive_days_5": positive_days_5,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def get_chip_events(code: str, basic_info: Optional[dict] = None) -> dict:
+    """获取筹码供给侧事件（解禁/减持/回购）。"""
+    ts_code = to_ts_code(code)
+    basic_info = basic_info or {}
+    float_shares = safe_float(basic_info.get("float_shares"))
+    total_shares = safe_float(basic_info.get("total_shares"))
+
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_30 = (datetime.now() + timedelta(days=30)).strftime("%Y%m%d")
+    start_90 = (datetime.now() + timedelta(days=90)).strftime("%Y%m%d")
+    back_30 = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+    back_90 = (datetime.now() - timedelta(days=90)).strftime("%Y%m%d")
+
+    result = {
+        "unlock_30d_ratio": 0.0,
+        "unlock_90d_ratio": 0.0,
+        "reduction_density_30d": 0.0,
+        "repurchase_ratio_90d": 0.0,
+    }
+
+    try:
+        df = pro().share_float(ts_code=ts_code)
+        if df is not None and not df.empty:
+            df = df.sort_values("float_date")
+            df30 = df[(df["float_date"] <= start_30) & (df["float_date"] >= end_date)]
+            df90 = df[(df["float_date"] <= start_90) & (df["float_date"] >= end_date)]
+            col = "float_share" if "float_share" in df.columns else None
+            if col:
+                unlock_30 = safe_float(pd.to_numeric(df30[col], errors="coerce").sum(), 0.0) or 0.0
+                unlock_90 = safe_float(pd.to_numeric(df90[col], errors="coerce").sum(), 0.0) or 0.0
+                if float_shares and float_shares > 0:
+                    # share_float 通常单位为万股，这里统一换算为股
+                    result["unlock_30d_ratio"] = round(unlock_30 * 10000 / float_shares * 100.0, 4)
+                    result["unlock_90d_ratio"] = round(unlock_90 * 10000 / float_shares * 100.0, 4)
+    except Exception as exc:
+        result["unlock_error"] = str(exc)
+
+    try:
+        df = pro().stk_holdertrade(ts_code=ts_code, start_date=back_30, end_date=end_date)
+        if df is not None and not df.empty:
+            de_col = "in_de" if "in_de" in df.columns else None
+            if de_col:
+                de_count = len(df[df[de_col] == "DE"])
+                result["reduction_density_30d"] = round(de_count / 30.0, 4)
+            else:
+                result["reduction_density_30d"] = round(len(df) / 30.0, 4)
+    except Exception as exc:
+        result["reduction_error"] = str(exc)
+
+    try:
+        df = pro().repurchase(ts_code=ts_code)
+        if df is not None and not df.empty:
+            date_col = "ann_date" if "ann_date" in df.columns else None
+            if date_col:
+                recent = df[df[date_col] >= back_90]
+            else:
+                recent = df
+
+            rep_ratio = 0.0
+            if total_shares and total_shares > 0 and "vol" in recent.columns:
+                vol = pd.to_numeric(recent["vol"], errors="coerce").fillna(0).sum()
+                rep_ratio = float(vol) * 10000 / total_shares * 100.0
+            else:
+                rep_ratio = len(recent) * 0.3
+            result["repurchase_ratio_90d"] = round(rep_ratio, 4)
+    except Exception as exc:
+        result["repurchase_error"] = str(exc)
+
+    return result
 
 
 @retry_on_failure(max_retries=2, delay=1.0)
@@ -591,12 +806,22 @@ def get_all_a_stocks() -> list:
         return []
 
 
-def fetch_stock_data(code: str, data_type: str = "all", years: int = 3, use_cache: bool = True) -> dict:
+def fetch_stock_data(
+    code: str,
+    data_type: str = "all",
+    years: int = 3,
+    use_cache: bool = True,
+    with_realtime: bool = False,
+    benchmark: str = "hs300",
+    realtime_window: int = 60,
+    cache_ttl_min: int = 1440,
+) -> dict:
     """获取单只股票的数据"""
     code = normalize_symbol(code)
+    cache_key = data_type if not with_realtime else f"{data_type}_rt_{benchmark}_{max(20, realtime_window)}"
 
     if use_cache:
-        cached = load_cache(code, data_type)
+        cached = load_cache(code, cache_key, ttl_minutes=cache_ttl_min)
         if cached:
             log(f"使用缓存数据: {code}")
             return cached
@@ -625,7 +850,32 @@ def fetch_stock_data(code: str, data_type: str = "all", years: int = 3, use_cach
         log("  - 获取估值数据...")
         result["valuation"] = get_valuation_data(code)
         log("  - 获取价格数据...")
-        result["price"] = get_price_data(code)
+        result["price"] = get_price_data(code, days=max(60, realtime_window))
+
+    if with_realtime:
+        if "basic_info" not in result:
+            log("  - 获取基本信息（实时模块依赖）...")
+            result["basic_info"] = get_stock_info(code)
+        if "price" not in result:
+            log("  - 获取价格数据（实时模块依赖）...")
+            result["price"] = get_price_data(code, days=max(60, realtime_window))
+
+        log("  - 获取资金流指标...")
+        result["flow_metrics"] = get_flow_metrics(code, days=20)
+        log("  - 获取筹码事件...")
+        result["chip_events"] = get_chip_events(code, basic_info=result.get("basic_info", {}))
+        log(f"  - 计算实时指标（benchmark={benchmark}）...")
+        benchmark_price = get_index_price_data(benchmark, days=max(60, realtime_window))
+        result["realtime_metrics"] = calculate_realtime_metrics(
+            price=result.get("price", {}),
+            benchmark_price=benchmark_price,
+            flow_metrics=result.get("flow_metrics", {}),
+            chip_events=result.get("chip_events", {}),
+            window=max(20, realtime_window),
+        )
+        result["realtime_metrics"]["benchmark"] = benchmark
+        if isinstance(benchmark_price, dict) and benchmark_price.get("error"):
+            result["realtime_metrics"]["benchmark_error"] = benchmark_price.get("error")
 
     if data_type in ["all", "holder"]:
         log("  - 获取股东数据...")
@@ -634,13 +884,20 @@ def fetch_stock_data(code: str, data_type: str = "all", years: int = 3, use_cach
         result["dividend"] = get_dividend_data(code)
 
     if use_cache:
-        save_cache(code, data_type, result)
+        save_cache(code, cache_key, result)
 
     log(f"数据获取完成: {code}")
     return result
 
 
-def fetch_multiple_stocks(codes: list, data_type: str = "basic") -> dict:
+def fetch_multiple_stocks(
+    codes: list,
+    data_type: str = "basic",
+    with_realtime: bool = False,
+    benchmark: str = "hs300",
+    realtime_window: int = 60,
+    cache_ttl_min: int = 1440,
+) -> dict:
     """获取多只股票数据"""
     result = {
         "fetch_time": datetime.now().isoformat(),
@@ -654,7 +911,15 @@ def fetch_multiple_stocks(codes: list, data_type: str = "basic") -> dict:
         code = normalize_symbol(code)
         log(f"[{i + 1}/{total}] 获取 {code}...")
         try:
-            stock_data = fetch_stock_data(code, data_type, use_cache=True)
+            stock_data = fetch_stock_data(
+                code,
+                data_type,
+                use_cache=True,
+                with_realtime=with_realtime,
+                benchmark=benchmark,
+                realtime_window=realtime_window,
+                cache_ttl_min=cache_ttl_min,
+            )
             if "error" not in stock_data.get("basic_info", {}):
                 result["stocks"].append(stock_data)
                 result["success_count"] += 1
@@ -712,7 +977,8 @@ def summarize_table(result: dict) -> str:
     price = result.get("price", {})
     valuation = result.get("valuation", {})
     sentiment = result.get("news_sentiment", {})
-    headers = ["代码", "名称", "行业", "最新价", "PE_TTM", "PB", "舆情", "数据类型"]
+    realtime = result.get("realtime_metrics", {})
+    headers = ["代码", "名称", "行业", "最新价", "PE_TTM", "PB", "实时分", "舆情", "数据类型"]
     rows = [[
         result.get("code", ""),
         basic.get("name", ""),
@@ -720,6 +986,7 @@ def summarize_table(result: dict) -> str:
         price.get("latest_price", ""),
         basic.get("pe_ttm", valuation.get("latest", {}).get("pe_ttm", "")),
         basic.get("pb", valuation.get("latest", {}).get("pb", "")),
+        realtime.get("realtime_score", "-"),
         sentiment.get("risk_level", "-"),
         result.get("data_type", ""),
     ]]
@@ -730,6 +997,7 @@ def main():
     default_years = int(os.getenv("STOCK_ANALYSIS_DEFAULT_YEARS", "3"))
     default_news_days = int(os.getenv("STOCK_ANALYSIS_DEFAULT_NEWS_DAYS", "7"))
     default_news_limit = int(os.getenv("STOCK_ANALYSIS_DEFAULT_NEWS_LIMIT", "20"))
+    default_cache_ttl = int(os.getenv("STOCK_ANALYSIS_CACHE_TTL_MIN", "1440"))
     parser = argparse.ArgumentParser(description="A股数据获取工具")
     parser.add_argument("--code", type=str, help="股票代码 (如: 600519)")
     parser.add_argument("--codes", type=str, help="多个股票代码，逗号分隔 (如: 600519,000858)")
@@ -748,6 +1016,10 @@ def main():
     parser.add_argument("--news-days", type=int, default=default_news_days, help=f"新闻窗口天数 (默认: {default_news_days})")
     parser.add_argument("--news-limit", type=int, default=default_news_limit, help=f"新闻最大条数 (默认: {default_news_limit})")
     parser.add_argument("--news-sources", type=str, default="", help="新闻来源过滤，逗号分隔")
+    parser.add_argument("--with-realtime", action="store_true", help="附加实时指标（趋势/确认/风险/筹码）")
+    parser.add_argument("--benchmark", type=str, default="hs300", choices=["hs300", "zz500", "zz1000", "cyb", "kcb"], help="相对强弱基准指数")
+    parser.add_argument("--realtime-window", type=int, default=60, help="实时指标窗口（日）")
+    parser.add_argument("--cache-ttl-min", type=int, default=default_cache_ttl, help=f"缓存TTL分钟数 (默认: {default_cache_ttl})")
     parser.add_argument("--format", choices=["json", "table"], default="json", help="输出格式")
     parser.add_argument("--quiet", action="store_true", help="静默模式，仅输出结果")
     parser.add_argument("--output", type=str, help="输出文件路径 (JSON)")
@@ -760,7 +1032,16 @@ def main():
     result = {}
 
     if args.code:
-        result = fetch_stock_data(args.code, args.data_type, args.years, use_cache=not args.no_cache)
+        result = fetch_stock_data(
+            args.code,
+            args.data_type,
+            args.years,
+            use_cache=not args.no_cache,
+            with_realtime=args.with_realtime,
+            benchmark=args.benchmark,
+            realtime_window=args.realtime_window,
+            cache_ttl_min=args.cache_ttl_min,
+        )
         if args.data_type in ["all", "news"] or args.with_news:
             log("  - 获取新闻与舆情...")
             result = attach_news_data(
@@ -771,7 +1052,14 @@ def main():
             )
     elif args.codes:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]
-        result = fetch_multiple_stocks(codes, args.data_type)
+        result = fetch_multiple_stocks(
+            codes,
+            args.data_type,
+            with_realtime=args.with_realtime,
+            benchmark=args.benchmark,
+            realtime_window=args.realtime_window,
+            cache_ttl_min=args.cache_ttl_min,
+        )
         if args.with_news:
             for item in result.get("stocks", []):
                 attach_news_data(

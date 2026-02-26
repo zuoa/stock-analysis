@@ -18,7 +18,19 @@ def test_generate_summary_has_score_and_sections():
     result = analyzer.generate_summary(level="standard")
 
     assert 0 <= result["score"] <= 100
+    assert result["realtime_score"] is not None
+    assert result["score_weights"]["realtime"] == 0.4
     assert "profitability" in result
     assert "anomalies" in result
     assert "performance" in result
     assert result["code"] == "600519"
+
+
+def test_generate_summary_fallback_to_fundamental_when_no_realtime():
+    data = load_fixture()
+    data.pop("realtime_metrics", None)
+    analyzer = FinancialAnalyzer(data)
+    result = analyzer.generate_summary(level="standard")
+
+    assert result["realtime_score"] is None
+    assert result["score_weights"]["realtime"] == 0.0

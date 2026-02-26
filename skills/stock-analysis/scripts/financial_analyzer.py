@@ -477,11 +477,13 @@ class FinancialAnalyzer:
             summary["anomalies"] = anomalies
             summary["performance"] = performance
             summary["news_sentiment"] = self.stock_data.get("news_sentiment", {})
+            if isinstance(self.stock_data.get("realtime_metrics"), dict):
+                summary["realtime_metrics"] = self.stock_data.get("realtime_metrics", {})
 
             if level == "deep":
                 summary["historical_indicators"] = self.stock_data.get('financial_indicators', [])
 
-        summary["score"] = self._calculate_score(
+        fundamental_score = self._calculate_fundamental_score(
             profitability,
             solvency,
             growth,
@@ -489,6 +491,14 @@ class FinancialAnalyzer:
             summary.get("news_sentiment", {}),
             performance,
         )
+        realtime_score = self._calculate_realtime_score()
+        summary["fundamental_score"] = fundamental_score
+        summary["realtime_score"] = realtime_score
+        summary["score_weights"] = {
+            "fundamental": 0.6 if realtime_score is not None else 1.0,
+            "realtime": 0.4 if realtime_score is not None else 0.0,
+        }
+        summary["score"] = self._blend_total_score(fundamental_score, realtime_score)
         summary["summary_title"] = self._build_summary_title(summary)
 
         return summary
@@ -509,8 +519,8 @@ class FinancialAnalyzer:
 
         return f"{name}({code})：{conclusion}"
 
-    def _calculate_score(self, profitability, solvency, growth, anomalies, news_sentiment=None, performance=None) -> int:
-        """计算综合评分 (0-100)"""
+    def _calculate_fundamental_score(self, profitability, solvency, growth, anomalies, news_sentiment=None, performance=None) -> int:
+        """计算财务与新闻维度综合评分 (0-100)。"""
         score = 50
 
         # 盈利能力评分
@@ -563,6 +573,38 @@ class FinancialAnalyzer:
 
         return max(0, min(100, score))
 
+    def _calculate_realtime_score(self) -> Optional[float]:
+        """读取实时指标分，如缺失则返回 None。"""
+        rt = self.stock_data.get("realtime_metrics")
+        if not isinstance(rt, dict):
+            return None
+
+        direct = self._safe_float(rt.get("realtime_score"))
+        if direct is not None:
+            return max(0.0, min(100.0, direct))
+
+        trend = self._safe_float((rt.get("trend") or {}).get("trend_score"))
+        confirm = self._safe_float((rt.get("confirm") or {}).get("confirm_score"))
+        risk_penalty = self._safe_float((rt.get("risk") or {}).get("risk_penalty"))
+        chip_penalty = self._safe_float((rt.get("chip") or {}).get("chip_penalty"))
+
+        if trend is None and confirm is None and risk_penalty is None and chip_penalty is None:
+            return None
+
+        trend = trend if trend is not None else 50.0
+        confirm = confirm if confirm is not None else 50.0
+        risk_penalty = risk_penalty if risk_penalty is not None else 20.0
+        chip_penalty = chip_penalty if chip_penalty is not None else 0.0
+        score = trend * 0.45 + confirm * 0.30 + (100 - risk_penalty) * 0.25 - chip_penalty
+        return max(0.0, min(100.0, score))
+
+    def _blend_total_score(self, fundamental_score: int, realtime_score: Optional[float]) -> int:
+        """按 6:4 融合财务分与实时分（实时缺失时退化为财务分）。"""
+        if realtime_score is None:
+            return int(max(0, min(100, round(fundamental_score))))
+        total = fundamental_score * 0.6 + realtime_score * 0.4
+        return int(max(0, min(100, round(total))))
+
     def compare_stocks(self, stocks_data: List[Dict]) -> Dict:
         """对比多只股票"""
         comparison = {
@@ -612,6 +654,9 @@ def main():
         lines.append(f"- 分析时间: {result.get('analysis_date','')}")
         lines.append(f"- 分析级别: {result.get('level','')}")
         lines.append(f"- 综合评分: {result.get('score','')}")
+        if result.get("realtime_score") is not None:
+            lines.append(f"- 财务分: {result.get('fundamental_score','')}")
+            lines.append(f"- 实时分: {result.get('realtime_score','')}")
         lines.append("")
 
         if isinstance(result.get("profitability"), dict):

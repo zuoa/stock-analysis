@@ -143,6 +143,35 @@
     "avg_volume_20d": 42000,
     "price_data": []
   },
+  "flow_metrics": {
+    "latest_trade_date": "20260213",
+    "latest_net_inflow": 1200.0,
+    "net_inflow_ratio": 0.25,
+    "positive_days_5": 3
+  },
+  "chip_events": {
+    "unlock_30d_ratio": 0.6,
+    "unlock_90d_ratio": 1.8,
+    "reduction_density_30d": 0.08,
+    "repurchase_ratio_90d": 0.3
+  },
+  "realtime_metrics": {
+    "window_days": 60,
+    "trend": {
+      "trend_score": 62.0
+    },
+    "confirm": {
+      "confirm_score": 58.0
+    },
+    "risk": {
+      "risk_penalty": 20.0
+    },
+    "chip": {
+      "chip_penalty": 2.0
+    },
+    "realtime_score": 60.5,
+    "benchmark": "hs300"
+  },
   "holder": {
     "top_10_holders": [],
     "holder_count_history": []

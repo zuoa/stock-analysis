@@ -1,0 +1,9 @@
+{
+  "errcode": 0,
+  "errmsg": "ok",
+  "group_chat": {
+    "chat_id": "chat-2",
+    "name": "普通资讯群",
+    "owner": "lisi"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "errcode": 0,
+  "errmsg": "ok",
+  "send_list": [
+    {
+      "external_userid": "wo1",
+      "chat_id": "chat-1",
+      "userid": "zhangsan",
+      "status": 0
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "skill_name": "activity-push",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "读取当前目录 feeds.md 和 ~/.aj-skills/.env，把最近 24 小时公众号文章里的活动提取出来，保存 raw.json、activity.json、activity-structured.json、activity-structured.md、activity-push.txt，并通过企业微信客户群 API 推送到外部群。",
+      "expected_output": "Skill 应使用 bash + curl + jq 完成抓取与落盘，并用 bundled Python CLI 封装客户联系/客户群 API 推送；模型仍需按文章语义判断是否为活动，最终产出 6 个以上输出文件并创建群发任务。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "帮我把公众号 feed 里的活动类文章筛出来，结构化为活动信息，再生成审阅 Markdown 和客户群 API 用的纯文本，但先不要推送。",
+      "expected_output": "Skill 应至少完成 feed 抓取、语义筛选、结构化提取、Markdown 生成和纯文本生成五步，并保留 bundled Python CLI 推送为可选最后一步。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "根据 feeds.md 批量抓文章，如果今天没有活动也要生成空结果文件，并把结果通过企业微信客户群 API 发到外部群。",
+      "expected_output": "Skill 应在空结果情况下仍产出空 JSON/Markdown/纯文本文件，并继续通过 bundled Python CLI 执行客户群群发任务创建。",
+      "files": []
+    }
+  ]
+}

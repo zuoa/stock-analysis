@@ -1,11 +1,16 @@
 # aj-skills
 
-本仓库当前包含一个可直接运行的技能：`skills/stock-analysis`。  
-它基于价值投资思路，使用 Tushare 公共数据提供 A 股筛选、个股分析、板块对比、估值计算与新闻舆情分析能力。
+本仓库当前包含多个可直接使用的技能：
+- `skills/stock-analysis`：基于价值投资思路，使用 Tushare 公共数据提供 A 股筛选、个股分析、板块对比、估值计算与新闻舆情分析能力
+- `skills/activity-push`：根据 `feeds.md` 抓取公众号 feed，由模型按文章语义判断是否为活动，提取结构化活动信息，生成审阅 Markdown 和推送文本，并通过 bash + curl 调用企业微信客户联系/客户群 API 推送到外部群
 
 
 ```bash
 npx skills add https://github.com/zuoa/aj-skills --skill aj-stock-analysis
+```
+
+```bash
+npx skills add https://github.com/zuoa/aj-skills --skill activity-push
 ```
 
 ## 目录结构
@@ -167,4 +172,3 @@ pytest -q
 - 本项目依赖外部数据源，接口限流或网络问题会影响抓取速度与成功率
 - 新闻舆情模块是规则法（MVP），适合快速风险扫描，不等于完整研报结论
 - 结果仅供研究与学习，不构成投资建议
-

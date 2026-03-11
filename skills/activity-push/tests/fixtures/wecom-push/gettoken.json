@@ -1,0 +1,6 @@
+{
+  "errcode": 0,
+  "errmsg": "ok",
+  "access_token": "token-fixture",
+  "expires_in": 7200
+}

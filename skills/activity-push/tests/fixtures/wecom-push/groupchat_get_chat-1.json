@@ -1,0 +1,9 @@
+{
+  "errcode": 0,
+  "errmsg": "ok",
+  "group_chat": {
+    "chat_id": "chat-1",
+    "name": "AI 活动群",
+    "owner": "zhangsan"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "errcode": 0,
+  "errmsg": "ok",
+  "group_chat_list": [
+    {
+      "chat_id": "chat-1",
+      "status": 0
+    }
+  ],
+  "next_cursor": "page2"
+}

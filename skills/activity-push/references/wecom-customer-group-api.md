@@ -33,13 +33,15 @@ Typical variables:
 ```bash
 WE_COM_CORP_ID=wwxxxxxxxxxxxxxxxx
 WE_COM_CONTACT_SECRET=xxxxxxxxxxxxxxxx
-WE_COM_GROUPMSG_SENDER_USERIDS=zhangsan,lisi
+WE_COM_GROUPMSG_SENDER_USERIDS=zhangsan
 WE_COM_TARGET_CHAT_IDS=wrOgQhDgAA...,wrOgQhDgBB...
 ```
 
 Notes:
+- all WeCom push variables are optional at the skill level; they only become required when the user actually wants to execute the push step
 - `WE_COM_CONTACT_SECRET` should be the secret that is allowed to call customer-contact endpoints
-- `WE_COM_GROUPMSG_SENDER_USERIDS` are the internal members who will own or send the group message tasks
+- `WE_COM_GROUPMSG_SENDER_USERIDS` must contain at least one internal member who will own or send the group message task
+- one sender is enough; use commas only when you intentionally want to create tasks for multiple senders
 - `WE_COM_TARGET_CHAT_IDS` is the safest targeting method when the exact groups are already known
 
 ## API sequence

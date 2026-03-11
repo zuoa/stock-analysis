@@ -3,20 +3,26 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "读取当前目录 feeds.md 和 ~/.aj-skills/.env，把最近 24 小时公众号文章里的活动提取出来，保存 raw.json、activity.json、activity-structured.json、activity-structured.md、activity-push.txt，并通过企业微信客户群 API 推送到外部群。",
-      "expected_output": "Skill 应使用 bash + curl + jq 完成抓取与落盘，并用 bundled Python CLI 封装客户联系/客户群 API 推送；模型仍需按文章语义判断是否为活动，最终产出 6 个以上输出文件并创建群发任务。",
+      "prompt": "读取当前目录 feeds.md 和 ~/.aj-skills/.env，把最近 24 小时公众号文章里的活动提取出来；如果有活动地址，用高德地理编码补全 WGS84 经纬度并生成静态地图 URL；再基于 activity-structured-geo.json 用 PIL 渲染一张活动汇总图；保存 raw.json、activity.json、activity-structured.json、activity-structured-geo.json、activity-summary.png、activity-structured.md、activity-push.txt，并通过企业微信客户群 API 推送到外部群。activity-structured.json 里的活动需要打分，并按价值高低排序。",
+      "expected_output": "Skill 应使用 bash + curl + jq 完成抓取与落盘，并用 bundled Python CLI 封装高德地理编码、静态地图 URL 生成、PIL 图片渲染和客户联系/客户群 API 推送；模型仍需按文章语义判断是否为活动，并在 activity-structured.json 中给每条活动打分、按价值降序排序，最终产出 8 个以上输出文件并创建群发任务。",
       "files": []
     },
     {
       "id": 2,
-      "prompt": "帮我把公众号 feed 里的活动类文章筛出来，结构化为活动信息，再生成审阅 Markdown 和客户群 API 用的纯文本，但先不要推送。",
-      "expected_output": "Skill 应至少完成 feed 抓取、语义筛选、结构化提取、Markdown 生成和纯文本生成五步，并保留 bundled Python CLI 推送为可选最后一步。",
+      "prompt": "帮我把公众号 feed 里的活动类文章筛出来，结构化为活动信息；如果有地址，用高德地理编码转成 WGS84，并生成静态地图 URL；再基于 activity-structured-geo.json 用 PIL 渲染一张活动汇总图，最后生成审阅 Markdown 和客户群 API 用的纯文本，但先不要推送。activity-structured.json 里的活动需要打分，并按价值高低排序；主题不明确的活动、招聘会、有奖征集不要保留。",
+      "expected_output": "Skill 应至少完成 feed 抓取、语义筛选、结构化提取、活动价值评分与排序、地址地理编码、静态地图 URL 生成、PIL 汇总图渲染、Markdown 生成和纯文本生成，并明确排除主题不明确的活动、招聘会和有奖征集，并保留 bundled Python CLI 推送为可选最后一步。",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "读取 feeds.md 提取活动，生成结构化结果和推送文本，但当前没有配置企业微信参数，所以不要执行推送。activity-structured.json 里的活动需要打分，并按价值高低排序。",
+      "expected_output": "Skill 应正常完成抓取、提取、活动价值评分与排序、坐标与静态地图 URL 补全、PIL 汇总图渲染和文本生成，并明确跳过第 6 步推送，不把缺失的企业微信参数视为整体失败。",
       "files": []
     },
     {
       "id": 3,
       "prompt": "根据 feeds.md 批量抓文章，如果今天没有活动也要生成空结果文件，并把结果通过企业微信客户群 API 发到外部群。",
-      "expected_output": "Skill 应在空结果情况下仍产出空 JSON/Markdown/纯文本文件，并继续通过 bundled Python CLI 执行客户群群发任务创建。",
+      "expected_output": "Skill 应在空结果情况下仍产出空 JSON、空结果图片、Markdown 和纯文本文件，并继续通过 bundled Python CLI 执行客户群群发任务创建。",
       "files": []
     }
   ]

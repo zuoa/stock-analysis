@@ -21,6 +21,7 @@ description: Extracts activity information from WeChat article feeds, lets the m
 - “这是不是活动”由模型阅读文章后做语义判断，不用关键字脚本筛选
 - 外部群推送走客户联系群发任务，不再走 webhook 机器人
 - 客户群 API 的复杂细节下沉到脚本和参考文档
+- 地址坐标补全走高德地理编码 CLI
 
 这样做的好处是：
 - 避免把“活动判断”硬编码成脆弱关键字规则
@@ -42,10 +43,14 @@ description: Extracts activity information from WeChat article feeds, lets the m
 如果缺少 `jq`，应先明确告诉用户当前环境不满足 skill 依赖，不要改用 Python 兜底。
 
 复杂推送逻辑使用：
+- [`fetch_recent_feeds.sh`](/Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/fetch_recent_feeds.sh)
 - [`wecom_customer_group_push.py`](/Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_customer_group_push.py)
+- [`amap_geocode_wgs84.py`](/Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/amap_geocode_wgs84.py)
+- [`render_activity_image.py`](/Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/render_activity_image.py)
 
 复杂 API 说明见：
 - [`wecom-customer-group-api.md`](/Users/yujian/Code/py/aj-skills/skills/activity-push/references/wecom-customer-group-api.md)
+- [`amap-geocode-wgs84.md`](/Users/yujian/Code/py/aj-skills/skills/activity-push/references/amap-geocode-wgs84.md)
 
 使用规则：
 - `SKILL.md` 先给出主流程
@@ -63,9 +68,10 @@ description: Extracts activity information from WeChat article feeds, lets the m
 ```bash
 MP_API_HOST=...
 MP_API_KEY=...
+AMAP_WEB_SERVICE_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 WE_COM_CORP_ID=wwxxxxxxxxxxxxxxxx
 WE_COM_CONTACT_SECRET=xxxxxxxxxxxxxxxx
-WE_COM_GROUPMSG_SENDER_USERIDS=zhangsan,lisi
+WE_COM_GROUPMSG_SENDER_USERIDS=zhangsan
 WE_COM_TARGET_CHAT_IDS=wrOgQhDgAA...,wrOgQhDgBB...
 WE_COM_TARGET_CHAT_NAME_KEYWORDS=活动,闭门会
 ```
@@ -73,9 +79,10 @@ WE_COM_TARGET_CHAT_NAME_KEYWORDS=活动,闭门会
 其中：
 - `MP_API_HOST`：必填
 - `MP_API_KEY`：可选；feed 接口需要鉴权时再提供
-- `WE_COM_CORP_ID`：外部群推送必填
-- `WE_COM_CONTACT_SECRET`：外部群推送必填；应使用客户联系 secret，或官方允许的可调用应用 secret
-- `WE_COM_GROUPMSG_SENDER_USERIDS`：外部群推送建议提供；表示哪些成员将收到群发任务并负责确认发送
+- `AMAP_WEB_SERVICE_KEY`：可选；需要把活动地址补全为坐标时提供
+- `WE_COM_CORP_ID`：可选；需要执行外部群推送时提供
+- `WE_COM_CONTACT_SECRET`：可选；需要执行外部群推送时提供。应使用客户联系 secret，或官方允许的可调用应用 secret
+- `WE_COM_GROUPMSG_SENDER_USERIDS`：可选；需要执行外部群推送时至少提供 1 个 sender。单个 sender 直接写一个值，多个 sender 再用英文逗号分隔
 - `WE_COM_TARGET_CHAT_IDS`：可选；若已知目标客户群 chat_id，优先显式指定
 - `WE_COM_TARGET_CHAT_NAME_KEYWORDS`：可选；已知 chat_id 不全时，可让 CLI 基于群名关键字二次过滤
 
@@ -84,6 +91,8 @@ WE_COM_TARGET_CHAT_NAME_KEYWORDS=活动,闭门会
 - 第一列是公众号 `MP_ID`
 - 后续内容视为公众号名称
 - 空行和 `#` 注释行会被忽略
+- 若 `MP_ID` 末尾误带英文逗号，脚本会自动清理
+- 若同一个 `MP_ID` 重复出现，脚本只按第一次出现处理
 
 示例：
 
@@ -103,7 +112,7 @@ EXEC_DIR="${EXEC_DIR:-$PWD}"
 ENV_FILE="${HOME}/.aj-skills/.env"
 FEEDS_FILE="${EXEC_DIR}/feeds.md"
 TODAY="$(date +%Y%m%d)"
-OUT_DIR="${EXEC_DIR}/${TODAY}"
+OUT_DIR="${EXEC_DIR}/activity-push/${TODAY}"
 
 test -f "${ENV_FILE}" || { echo "缺少 ${ENV_FILE}"; exit 1; }
 test -f "${FEEDS_FILE}" || { echo "缺少 ${FEEDS_FILE}"; exit 1; }
@@ -115,17 +124,15 @@ source "${ENV_FILE}"
 set +a
 
 test -n "${MP_API_HOST}" || { echo "缺少 MP_API_HOST"; exit 1; }
-test -n "${WE_COM_CORP_ID:-}" || { echo "缺少 WE_COM_CORP_ID"; exit 1; }
-test -n "${WE_COM_CONTACT_SECRET:-}" || { echo "缺少 WE_COM_CONTACT_SECRET"; exit 1; }
-test -n "${WE_COM_GROUPMSG_SENDER_USERIDS:-}" || { echo "缺少 WE_COM_GROUPMSG_SENDER_USERIDS"; exit 1; }
 
 mkdir -p "${OUT_DIR}"
 ```
 
 检查项：
 - `~/.aj-skills/.env` 是否存在
-- `MP_API_HOST` / `WE_COM_CORP_ID` / `WE_COM_CONTACT_SECRET` / `WE_COM_GROUPMSG_SENDER_USERIDS` 是否存在
+- `MP_API_HOST` 是否存在
 - `MP_API_KEY` 是否存在取决于 feed 接口是否需要鉴权
+- `WE_COM_CORP_ID` / `WE_COM_CONTACT_SECRET` / `WE_COM_GROUPMSG_SENDER_USERIDS` 只有在需要执行第 6 步推送时才检查
 - `WE_COM_TARGET_CHAT_IDS` 可选；未提供时可用客户群列表接口发现目标群
 - `feeds.md` 是否存在且至少包含一个公众号
 
@@ -136,132 +143,36 @@ mkdir -p "${OUT_DIR}"
 ### 2. 拉取 feed 并生成 `raw.json`
 
 ```bash
-CUTOFF_EPOCH="$(date -v-24H +%s 2>/dev/null || date -d '24 hours ago' +%s)"
-RAW_TMP_DIR="$(mktemp -d)"
+FETCH_ARGS=(
+  --feeds-file "${FEEDS_FILE}"
+  --output-file "${OUT_DIR}/raw.json"
+  --api-host "${MP_API_HOST}"
+  --hours 24
+)
 
-parse_epoch() {
-  local raw="${1:-}"
-  local normalized=""
-  local epoch=""
-
-  test -n "${raw}" || { echo 0; return; }
-
-  # 把 +08:00 规范成 +0800，便于 BSD date 解析
-  normalized="$(printf '%s' "${raw}" | sed -E 's/([+-][0-9]{2}):([0-9]{2})$/\1\2/')"
-
-  # macOS / BSD date
-  for fmt in \
-    "%Y-%m-%dT%H:%M:%S%z" \
-    "%Y-%m-%dT%H:%M%z" \
-    "%Y-%m-%d %H:%M:%S%z" \
-    "%Y-%m-%d %H:%M%z" \
-    "%Y-%m-%dT%H:%M:%SZ" \
-    "%Y-%m-%dT%H:%MZ" \
-    "%Y-%m-%d %H:%M:%S" \
-    "%Y-%m-%d %H:%M" \
-    "%Y/%m/%d %H:%M:%S" \
-    "%Y/%m/%d %H:%M" \
-    "%Y-%m-%d" \
-    "%Y/%m/%d"
-  ; do
-    epoch="$(date -j -f "${fmt}" "${normalized}" +%s 2>/dev/null)" && {
-      echo "${epoch}"
-      return
-    }
-  done
-
-  # GNU date
-  epoch="$(date -d "${raw}" +%s 2>/dev/null)" && {
-    echo "${epoch}"
-    return
-  }
-  epoch="$(date -d "${normalized}" +%s 2>/dev/null)" && {
-    echo "${epoch}"
-    return
-  }
-
-  echo 0
-}
-
-while IFS= read -r line; do
-  case "${line}" in
-    ""|\#*) continue ;;
-  esac
-
-  MP_ID="$(printf '%s\n' "${line}" | awk '{print $1}')"
-  MP_NAME="$(printf '%s\n' "${line}" | cut -d' ' -f2-)"
-  FEED_URL="${MP_API_HOST%/}/feed/${MP_ID}.json"
-  OUT_FILE="${RAW_TMP_DIR}/${MP_ID}.json"
-
-  CURL_ARGS=(-fsSL -H "Accept: application/json")
-  if [ -n "${MP_API_KEY:-}" ]; then
-    CURL_ARGS+=(
-      -H "Authorization: Bearer ${MP_API_KEY}"
-      -H "X-API-Key: ${MP_API_KEY}"
-    )
-  fi
-
-  if ! curl "${CURL_ARGS[@]}" "${FEED_URL}" -o "${OUT_FILE}"; then
-    echo "warning: 拉取失败 ${MP_ID} ${MP_NAME}" >&2
-    continue
-  fi
-
-  JSONL_FILE="${RAW_TMP_DIR}/${MP_ID}.jsonl"
-
-  jq -c \
-    --arg mpId "${MP_ID}" \
-    --arg mpName "${MP_NAME}" \
-    --arg feedUrl "${FEED_URL}" '
-      def article_list:
-        if type == "array" then .
-        elif .items? then .items
-        elif .articles? then .articles
-        elif .entries? then .entries
-        elif (.data? | type) == "array" then .data
-        elif (.data? | type) == "object" then (.data.items // .data.articles // .data.entries // [])
-        else []
-        end;
-
-      [
-        article_list[]
-        | . + {
-            mpId: $mpId,
-            mpName: $mpName,
-            feedUrl: $feedUrl,
-            sourceUpdated: (.updated // .publish_time // .published // .pubDate // ""),
-            sourceUrl: (.url // .link // .permalink // ""),
-            sourceTitle: (.title // .name // ""),
-            sourceSummary: (.summary // .description // .excerpt // .digest // "")
-          }
-      ][]
-    ' "${OUT_FILE}" > "${JSONL_FILE}"
-
-  : > "${OUT_FILE}.filtered"
-  while IFS= read -r article_json; do
-    UPDATED_RAW="$(printf '%s' "${article_json}" | jq -r '.sourceUpdated // empty')"
-    UPDATED_EPOCH="$(parse_epoch "${UPDATED_RAW}")"
-    if [ "${UPDATED_EPOCH}" -ge "${CUTOFF_EPOCH}" ] 2>/dev/null; then
-      printf '%s\n' "${article_json}" >> "${OUT_FILE}.filtered"
-    fi
-  done < "${JSONL_FILE}"
-done < "${FEEDS_FILE}"
-
-if find "${RAW_TMP_DIR}" -name '*.filtered' -print -quit | grep -q .; then
-  jq -s '.' "${RAW_TMP_DIR}"/*.filtered | jq -s 'add // []' > "${OUT_DIR}/raw.json"
-else
-  printf '[]\n' > "${OUT_DIR}/raw.json"
+if [ -n "${MP_API_KEY:-}" ]; then
+  FETCH_ARGS+=(--api-key "${MP_API_KEY}")
 fi
+
+bash /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/fetch_recent_feeds.sh "${FETCH_ARGS[@]}"
 ```
 
+说明：
+- 统一使用 `fetch_recent_feeds.sh`，不要在会话里临时手写 `while read` 抓取循环
+- 这个脚本会用独立文件描述符读取 `feeds.md`，避免循环体里的命令意外影响后续 feed 读取，解决“只抓到第一个 feed”的问题
+- `CUTOFF_EPOCH` 由脚本内部计算，无需在外层重复维护
+
 默认输出目录：
-- `{EXEC_DIR}/{yyyyMMdd}/raw.json`
-- `{EXEC_DIR}/{yyyyMMdd}/activity.json`
-- `{EXEC_DIR}/{yyyyMMdd}/activity-structured.json`
-- `{EXEC_DIR}/{yyyyMMdd}/activity-structured.md`
-- `{EXEC_DIR}/{yyyyMMdd}/activity-push.txt`
-- `{EXEC_DIR}/{yyyyMMdd}/customer-groups.json`
-- `{EXEC_DIR}/{yyyyMMdd}/groupmsg-create-result.json`
-- `{EXEC_DIR}/{yyyyMMdd}/push-result.md`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/raw.json`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/activity.json`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/activity-structured.json`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/activity-structured-geo.json`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/activity-summary.png`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/activity-structured.md`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/activity-push.txt`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/customer-groups.json`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/groupmsg-create-result.json`
+- `{EXEC_DIR}/activity-push/{yyyyMMdd}/push-result.md`
 
 注意：
 - 不要再用 `jq fromdateiso8601` 解析带时区偏移的时间；它对 `+08:00` 这类格式并不可靠。
@@ -279,6 +190,7 @@ fi
 - 文章的主要目的，是邀请用户在某个时间段参与一个具体安排，而不是单纯传递资讯
 - 文中存在明确或隐含的参与动作，例如报名、预约、到场、线上进入、提交申请、加入议程
 - 文章围绕一次具体事件展开，通常能对应到时间、地点、参与方式、人数、议程、对象或组织方中的若干项
+- 活动主题必须明确，用户能清楚知道这是围绕什么主题、什么内容展开的活动
 - 即便没有写出“活动”二字，只要本质上是在组织一次可参与的时间性事件，也算活动
 
 不要判定为“活动”的内容：
@@ -286,11 +198,15 @@ fi
 - 行业资讯、观点评论、融资新闻、产品公告
 - 招聘、招生、课程长期售卖页，除非它明确对应一个具体场次或时间段
 - 纯资料下载、白皮书发布、功能上线通知
+- 主题模糊、内容空泛、看不出核心议题或实际安排的活动通知
+- 招聘会、宣讲招聘、岗位双选会、人才招募会
+- 有奖征集、征文征集、作品征集、评选征集、抽奖征集等拉新型活动
 
 边界情况按下面处理：
 - “征集 / 招募 / 训练营 / 路演 / Demo Day / Webinar / 闭门会”：如果用户需要在某个时间窗口内参与，通常算活动
 - “长期社群招募 / 常年报名”：如果没有明确场次或时间边界，通常不算活动
 - “直播预告”：如果有具体播出时间和参与入口，算活动
+- 但如果活动主题本身不明确，或本质是招聘 / 有奖征集，即使存在时间窗口，也不要算活动
 
 生成 `activity.json` 时：
 - 文件内容必须是 `raw.json` 子集组成的 JSON 数组
@@ -343,6 +259,9 @@ fi
 - 字段缺失时使用空字符串 `""`，图片缺失时使用空数组 `[]`
 - 如果同一活动重复出现在多篇文章中，按“同一事件实体”去重，而不是只看标题是否完全一致
 - 去重时综合活动名称、时间、地点、组织方、议程内容判断
+- 如果活动主题不明确，或属于招聘会 / 有奖征集这类明确排除项，不要进入 `activity-structured.json`
+- 每条活动都要做内部价值评分，并按评分结果排序
+- `activity-structured.json` 必须按活动价值从高到低输出，价值最高的活动排在最前面
 - 输出必须是 JSON 数组
 
 允许保留这些可选来源字段，便于后续追踪：
@@ -383,22 +302,118 @@ fi
 - `activityDescription`：1 到 3 句，不要整段照抄原文
 - `activityImages`：必须是数组
 
+活动价值评分时优先考虑：
+- 对目标用户是否有直接价值，是否值得立即行动
+- 主办方、嘉宾、合作方是否可靠，资源是否稀缺
+- 时间、地点、报名方式、门槛、截止时间是否明确
+- 活动是否具体可执行，而不是泛泛宣传
+- 是否有明确名额、报名窗口或时效性
+
+评分字段只用于内部排序，不要默认写入最终面向用户的 `activity-structured.json`、Markdown、图片或推送文本。
+
+排序规则：
+- 先按内部评分降序排列
+- 若分数相同，优先开始时间更近且信息更完整的活动
+- 若仍然相同，优先主办方更可靠、参与门槛更清晰的活动
+
 落盘时优先保证 JSON 合法。推荐用下面方式写入：
 
 ```bash
 printf '%s\n' "${STRUCTURED_JSON}" | jq '.' > "${OUT_DIR}/activity-structured.json"
 ```
 
-### 5. 生成审阅用 Markdown 和 API 推送用纯文本
+### 4.5 使用高德地理编码补全坐标和静态地图 URL，并生成 `activity-structured-geo.json`
 
-将 `activity-structured.json` 保存为：
+如果某条活动存在 `activityAddress`，应继续补全坐标。
+
+执行入口：
+
+```bash
+python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/amap_geocode_wgs84.py \
+  --input "${OUT_DIR}/activity-structured.json" \
+  --output "${OUT_DIR}/activity-structured-geo.json" \
+  --amap-key "${AMAP_WEB_SERVICE_KEY}"
+```
+
+本地 fixture 验证可用：
+
+```bash
+python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/amap_geocode_wgs84.py \
+  --input "${OUT_DIR}/activity-structured.json" \
+  --output "${OUT_DIR}/activity-structured-geo.json" \
+  --fixture-file /Users/yujian/Code/py/aj-skills/skills/activity-push/tests/fixtures/amap-geocode/responses.json
+```
+
+补全规则：
+- 若 `activityAddress` 为空，坐标字段和静态图 URL 置空，`activityGeoStatus` / `activityStaticMapStatus` 设为 `skipped`
+- 若地址过于模糊、没有精确到可落图的地点，直接跳过地理编码，`activityGeoStatus` / `activityStaticMapStatus` 设为 `skipped_vague`
+- 若高德未命中地址，坐标字段和静态图 URL 置空，`activityGeoStatus` / `activityStaticMapStatus` 设为 `not_found`
+- 若命中地址，保留高德返回坐标为 GCJ-02，并额外补出 WGS84
+- 若提供了 `AMAP_WEB_SERVICE_KEY`，同时拼出不带 marker 的高德静态地图 URL，供最终 Markdown 直接引用
+
+这里的“模糊地址”包括但不限于：
+- 只有“线上”“腾讯会议”“直播间”这类非线下地点
+- 只有“报名后通知”“另行通知”“详见海报”这类未给出实体位置的描述
+- 只有城区、附近、周边等大范围位置，没有具体门牌、楼宇或明确 POI
+
+推荐追加这些字段：
+- `activityLongitudeGCJ02`
+- `activityLatitudeGCJ02`
+- `activityLongitudeWGS84`
+- `activityLatitudeWGS84`
+- `activityGeoProvider`
+- `activityGeoStatus`
+- `activityStaticMapUrl`
+- `activityStaticMapStatus`
+
+坐标系说明：
+- 高德地理编码结果按高德坐标处理
+- 根据高德坐标系说明，这里把返回的 `location` 视为 GCJ-02
+- 若用户需要 WGS84，则由本地转换公式补出
+- 更详细说明见 [`amap-geocode-wgs84.md`](/Users/yujian/Code/py/aj-skills/skills/activity-push/references/amap-geocode-wgs84.md)
+
+### 5. 使用 Python CLI + PIL 基于 `activity-structured-geo.json` 渲染汇总图片
+
+在推送前，先把结构化活动信息渲染为一张图片，便于人工审阅、归档或后续接入图片消息链路。
+
+执行入口：
+
+```bash
+python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/render_activity_image.py \
+  --input "${OUT_DIR}/activity-structured-geo.json" \
+  --output "${OUT_DIR}/activity-summary.png" \
+  --title "活动情报速递" \
+  --subtitle "$(date +%F)"
+```
+
+要求：
+- 输入优先使用 `activity-structured-geo.json`
+- 输出固定为单张 PNG
+- 图片中只渲染实际存在的数据字段；缺失字段直接省略，不要写“未说明”“待补充”等占位词
+- 只有在活动具备有效经纬度时才显示地图预览；没有经纬度时不要渲染地图占位块
+- 若存在 `activityStaticMapUrl` 且有有效经纬度，可把静态地图贴进图片；地图图面不要再额外叠加 marker、十字线或高亮点
+- 若存在原文链接，可渲染二维码，但二维码区域不要使用红色强调条，也不要写“链接已转为二维码”这类无效说明
+- 无活动时也要生成空结果图片，便于归档
+
+推荐输出：
+- `{EXEC_DIR}/{yyyyMMdd}/activity-summary.png`
+
+### 5.5 生成审阅用 Markdown 和 API 推送用纯文本
+
+优先使用 `activity-structured-geo.json` 作为输入；若未执行坐标补全，再回退到 `activity-structured.json`。
+
+将结构化结果保存为：
 - `{EXEC_DIR}/{yyyyMMdd}/activity-structured.md`
 - `{EXEC_DIR}/{yyyyMMdd}/activity-push.txt`
 
 `activity-structured.md` 要求：
 - 标题简洁，适合群消息
 - 每个活动单独一节
+- 活动顺序必须与 `activity-structured.json` 保持一致，按价值从高到低展示
 - 优先展示：活动名称、时间、地点、人数、活动说明
+- 缺失字段直接省略，不要输出“待补充”“未说明”
+- 若存在 `activityStaticMapUrl`，直接展示静态地图图片或图片链接
+- 不要在最终 Markdown 里展示经纬度字段
 - 若内容过长，先在文件中拆成多个二级标题段，便于人工审阅
 - 无活动时明确写“最近 24 小时未发现新的活动文章”
 
@@ -413,15 +428,14 @@ printf '%s\n' "${STRUCTURED_JSON}" | jq '.' > "${OUT_DIR}/activity-structured.js
 - 类型：活动类型
 - 时间：2026-03-12 14:00 - 2026-03-12 17:00
 - 地点：活动地址
+- 地图：![活动地点静态图](https://restapi.amap.com/v3/staticmap?location=121.436525,31.194729&zoom=15&size=750*300&scale=2&key=YOUR_AMAP_WEB_SERVICE_KEY)
 - 人数：50
 - 说明：活动说明
 - 来源：某公众号 / https://example.com/post/1
 
 ## 2. 活动名称
 - 类型：活动类型
-- 时间：待补充
 - 地点：线上
-- 人数：未说明
 - 说明：活动说明
 - 来源：某公众号 / https://example.com/post/2
 ```
@@ -445,6 +459,9 @@ EOF
 `activity-push.txt` 是真正发给客户群 API 的文本内容，要求：
 - 纯文本，不使用 Markdown 语法
 - 适当压缩长度，避免过长导致成员端不愿发送
+- 活动顺序必须与 `activity-structured.json` 保持一致，按价值从高到低排列
+- 第一屏优先给出最值得推送的 1 到 3 个活动
+- 缺失字段直接省略，不要输出“待补充”“未说明”
 - 每条活动建议控制在 2 到 5 行
 - 无活动时明确写“最近 24 小时未发现新的活动文章”
 
@@ -462,7 +479,6 @@ EOF
 
 2. 活动名称
 类型：活动类型
-时间：待补充
 地点：线上
 说明：活动说明
 链接：https://example.com/post/2
@@ -477,6 +493,39 @@ EOF
 ```
 
 ### 6. 使用 Python CLI 封装客户联系/客户群 API 推送
+
+这一步是可选步骤。
+
+当前默认仍发送 `activity-push.txt` 文本内容。
+`activity-summary.png` 先作为推送前的图片产物和归档文件保留，不在本步骤直接发送。
+
+只有当以下 3 个变量都存在时，才执行推送：
+- `WE_COM_CORP_ID`
+- `WE_COM_CONTACT_SECRET`
+- `WE_COM_GROUPMSG_SENDER_USERIDS`
+
+如果任意一个缺失：
+- 跳过第 6 步
+- 不报错
+- 在回复中明确说明“未提供完整企业微信推送配置，已跳过推送步骤”
+- 此时不强制要求产出 `push-result.md`
+
+推荐守卫写法：
+
+```bash
+if [ -n "${WE_COM_CORP_ID:-}" ] && [ -n "${WE_COM_CONTACT_SECRET:-}" ] && [ -n "${WE_COM_GROUPMSG_SENDER_USERIDS:-}" ]; then
+  python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_customer_group_push.py \
+    --corp-id "${WE_COM_CORP_ID}" \
+    --contact-secret "${WE_COM_CONTACT_SECRET}" \
+    --sender-userids "${WE_COM_GROUPMSG_SENDER_USERIDS}" \
+    --target-chat-ids "${WE_COM_TARGET_CHAT_IDS:-}" \
+    --chat-name-keywords "${WE_COM_TARGET_CHAT_NAME_KEYWORDS:-}" \
+    --message-file "${OUT_DIR}/activity-push.txt" \
+    --out-dir "${OUT_DIR}"
+else
+  echo "skip push: missing WeCom push config"
+fi
+```
 
 ```bash
 python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_customer_group_push.py \
@@ -529,16 +578,22 @@ python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_custo
 - `raw.json` 必须是最近 24 小时文章组成的 JSON 数组
 - `activity.json` 必须是活动候选文章组成的 JSON 数组
 - `activity-structured.json` 必须是去重后的活动对象数组
+- `activity-structured.json` 必须按内部评分结果降序排列
+- `activity-structured-geo.json` 必须在有地址时尽量补全 GCJ-02、WGS84 和静态地图 URL
+- `activity-summary.png` 必须由 `activity-structured-geo.json` 渲染生成；空结果也要产出
 - `activity-structured.md` 必须用于人工审阅，默认中文
+- `activity-structured.md` 不展示坐标字段，优先展示静态地图
 - `activity-push.txt` 必须用于客户群 API 的 `text.content`
-- `push-result.md` 必须记录每个 sender 的群发任务结果
+- 若执行了推送，`push-result.md` 必须记录每个 sender 的群发任务结果
 
 如果没有活动：
 - 仍然生成所有目标文件
 - `activity.json` 与 `activity-structured.json` 为空数组
+- `activity-structured-geo.json` 也应为空数组
+- `activity-summary.png` 仍应生成空结果图片
 - `activity-structured.md` 写明“最近 24 小时未发现新的活动文章”
 - `activity-push.txt` 写明“最近 24 小时未发现新的活动文章”
-- `push-result.md` 仍要记录群发任务结果
+- 若执行了推送，`push-result.md` 仍要记录群发任务结果
 
 ## Semantic Judgment Rules
 
@@ -565,6 +620,7 @@ python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_custo
 - 通过 `externalcontact/remind_groupmsg_send` 触发提醒
 - 通过 `externalcontact/get_groupmsg_send_result` 记录结果
 - 消息正文优先使用纯文本 `text.content`，不要把 Markdown 原样塞进客户群发接口
+- 只有在推送配置完整时才执行第 6 步
 - 所有 sender 完成后，再写 `push-result.md`
 
 ## Quality Checklist
@@ -576,10 +632,13 @@ python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_custo
 - 已由模型按语义判断活动候选并产出 `activity.json`
 - 已提取结构化字段并去重
 - 已产出 `activity-structured.json`
+- 已完成活动价值评分并按高到低排序
+- 如地址存在，已产出 `activity-structured-geo.json`
+- 已产出 `activity-summary.png`
 - 已产出审阅用 `activity-structured.md`
 - 已产出推送用 `activity-push.txt`
-- 已通过 bundled Python CLI 调用客户联系/客户群 API 创建群发任务
-- 已产出 `push-result.md`
+- 若推送配置完整，已通过 bundled Python CLI 调用客户联系/客户群 API 创建群发任务
+- 若执行了推送，已产出 `push-result.md`
 - 回复中明确给出所有输出文件路径
 - 如处于开发或调试阶段，已至少运行一次 CLI dry-run 或本地测试
 
@@ -592,6 +651,7 @@ python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_custo
 3. 在 `push-result.md` 或终端输出中保留失败原因摘要
 4. 如果 feed JSON 结构不兼容，先保存原始结果，再说明使用了什么字段假设
 5. 如果客户群 API 返回鉴权、字段或权限错误，不要自动回退到 webhook 或扩大发送范围
+6. 如果企业微信推送配置缺失，直接跳过第 6 步，不要把整个 skill 判定为失败
 
 ## Optimization Notes
 
@@ -602,6 +662,8 @@ python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_custo
 - 活动去重改为事件实体判断，而不是字符串硬匹配
 - 推送链路升级为客户联系/客户群 API，更适合企业微信外部群
 - 审阅内容与发送内容分离，降低 API 消息体格式不兼容风险
+- 活动地址支持补全高德坐标、WGS84 坐标和静态地图 URL，便于 Markdown 展示或下游系统使用
+- 推送前增加 PIL 汇总图，方便人工快速过目，也为后续图片消息链路留出稳定产物
 - 所有步骤都落盘，便于二次检查和重跑
 
 ## Test Prompts
@@ -609,5 +671,5 @@ python3 /Users/yujian/Code/py/aj-skills/skills/activity-push/scripts/wecom_custo
 可用这些提示词测试 skill 是否会正确触发：
 
 1. “根据当前目录的 feeds.md，把最近 24 小时公众号文章里的活动提取出来，并通过企业微信客户群 API 发到外部群。”
-2. “读取 ~/.aj-skills/.env 和 feeds.md，输出 raw.json、activity.json、activity-structured.json、activity-structured.md、activity-push.txt，再创建客户群群发任务。”
-3. “帮我做一个活动推送流水线：从公众号 feed 抓文章，筛活动，结构化提取，生成审阅 Markdown 和外部群发送文本，并推送到企业微信外部群。”
+2. “读取 ~/.aj-skills/.env 和 feeds.md，输出 raw.json、activity.json、activity-structured.json、activity-structured-geo.json、activity-summary.png、activity-structured.md、activity-push.txt，再创建客户群群发任务。”
+3. “帮我做一个活动推送流水线：从公众号 feed 抓文章，筛活动，结构化提取，补全高德地址坐标并转成 WGS84，顺手生成静态地图 URL，再用 PIL 渲染一张活动汇总图，生成审阅 Markdown 和外部群发送文本，并推送到企业微信外部群。”
